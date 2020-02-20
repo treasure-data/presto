@@ -458,8 +458,6 @@ class Query
         if (nextToken.isPresent()) {
             nextResultsUri = createNextResultsUri(scheme, uriInfo, nextToken.getAsLong());
         }
-        Optional<URI> partialCancelUri = findCancelableLeafStage(queryInfo)
-                .map(stage -> this.createPartialCancelUri(stage, scheme, uriInfo));
 
         // update catalog, schema, and path
         setCatalog = queryInfo.getSetCatalog();
@@ -485,7 +483,7 @@ class Query
         QueryResults queryResults = new QueryResults(
                 queryId.toString(),
                 queryHtmlUri,
-                partialCancelUri.orElse(null),
+                findCancelableLeafStage(queryInfo),
                 nextResultsUri,
                 columns,
                 data,
@@ -553,18 +551,6 @@ class Query
                 .path(queryId.toString())
                 .path(slug)
                 .path(String.valueOf(nextToken))
-                .replaceQuery("")
-                .build();
-    }
-
-    private URI createPartialCancelUri(int stage, String scheme, UriInfo uriInfo)
-    {
-        return uriInfo.getBaseUriBuilder()
-                .scheme(scheme)
-                .replacePath("/v1/statement/partialCancel")
-                .path(queryId.toString())
-                .path(String.valueOf(stage))
-                .path(slug)
                 .replaceQuery("")
                 .build();
     }
@@ -679,30 +665,30 @@ class Query
         return nodes.build();
     }
 
-    private static Optional<Integer> findCancelableLeafStage(QueryInfo queryInfo)
+    private static URI findCancelableLeafStage(QueryInfo queryInfo)
     {
         // if query is running, find the leaf-most running stage
-        return queryInfo.getOutputStage().flatMap(Query::findCancelableLeafStage);
+        return queryInfo.getOutputStage().map(Query::findCancelableLeafStage).orElse(null);
     }
 
-    private static Optional<Integer> findCancelableLeafStage(StageInfo stage)
+    private static URI findCancelableLeafStage(StageInfo stage)
     {
         // if this stage is already done, we can't cancel it
         if (stage.getState().isDone()) {
-            return Optional.empty();
+            return null;
         }
 
         // attempt to find a cancelable sub stage
         // check in reverse order since build side of a join will be later in the list
         for (StageInfo subStage : Lists.reverse(stage.getSubStages())) {
-            Optional<Integer> leafStage = findCancelableLeafStage(subStage);
-            if (leafStage.isPresent()) {
+            URI leafStage = findCancelableLeafStage(subStage);
+            if (leafStage != null) {
                 return leafStage;
             }
         }
 
         // no matching sub stage, so return this stage
-        return Optional.of(stage.getStageId().getId());
+        return stage.getSelf();
     }
 
     private static QueryError toQueryError(QueryInfo queryInfo)

@@ -13,9 +13,14 @@
  */
 package io.prestosql.plugin.jdbc;
 
+import net.jodah.failsafe.Failsafe;
+import net.jodah.failsafe.FailsafeException;
+import net.jodah.failsafe.RetryPolicy;
+
 import java.sql.Connection;
 import java.sql.Driver;
 import java.sql.SQLException;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
@@ -66,14 +71,21 @@ public class DriverConnectionFactory
 
     @Override
     public Connection openConnection(JdbcIdentity identity)
-            throws SQLException
+            throws FailsafeException
     {
         userCredentialName.ifPresent(credentialName -> setConnectionProperty(connectionProperties, identity.getExtraCredentials(), credentialName, "user"));
         passwordCredentialName.ifPresent(credentialName -> setConnectionProperty(connectionProperties, identity.getExtraCredentials(), credentialName, "password"));
 
-        Connection connection = driver.connect(connectionUrl, connectionProperties);
-        checkState(connection != null, "Driver returned null connection");
-        return connection;
+        RetryPolicy<Object> retryPolicy = new RetryPolicy<>()
+                .handle(SQLException.class)
+                .withBackoff(1000, 10 * 60 * 1000, ChronoUnit.MILLIS)
+                .withJitter(0.2);
+
+        return Failsafe.with(retryPolicy).get(() -> {
+            Connection connection = driver.connect(connectionUrl, connectionProperties);
+            checkState(connection != null, "Driver returned null connection");
+            return connection;
+        });
     }
 
     private static void setConnectionProperty(Properties connectionProperties, Map<String, String> extraCredentials, String credentialName, String propertyName)

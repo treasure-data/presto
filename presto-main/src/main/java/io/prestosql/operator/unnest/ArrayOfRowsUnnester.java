@@ -13,108 +13,80 @@
  */
 package io.prestosql.operator.unnest;
 
-import com.google.common.collect.Iterables;
+import com.google.common.collect.ImmutableList;
+import io.prestosql.spi.PageBuilder;
 import io.prestosql.spi.block.Block;
-import io.prestosql.spi.block.ColumnarArray;
+import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.block.ColumnarRow;
 import io.prestosql.spi.type.RowType;
 import io.prestosql.spi.type.Type;
 
+import java.util.List;
+
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
-import static io.prestosql.spi.block.ColumnarArray.toColumnarArray;
-import static io.prestosql.spi.block.ColumnarRow.toColumnarRow;
 import static java.util.Objects.requireNonNull;
 
-/**
- * Unnester for a nested column with array type, only when array elements are of {@code RowType} type.
- * It maintains {@link ColumnarArray} and {@link ColumnarRow} objects to get underlying elements. The two
- * different columnar structures are required because there are two layers of translation involved. One
- * from {@code ArrayBlock} to {@code RowBlock}, and then from {@code RowBlock} to individual element blocks.
- *
- * All protected methods implemented here assume that they are invoked when {@code columnarArray} and
- * {@code columnarRow} are non-null.
- */
-class ArrayOfRowsUnnester
-        extends Unnester
+public class ArrayOfRowsUnnester
+        implements Unnester
 {
-    private ColumnarArray columnarArray;
+    private final List<Type> fieldTypes;
     private ColumnarRow columnarRow;
-    private final int fieldCount;
+    private int position;
+    private int nonNullPosition;
+    private int positionCount;
 
-    // Keeping track of null row element count is required. This count needs to be deducted
-    // when translating row block indexes to element block indexes.
-    private int nullRowsEncountered;
-
-    public ArrayOfRowsUnnester(RowType elementType)
+    public ArrayOfRowsUnnester(Type elementType)
     {
-        super(Iterables.toArray(requireNonNull(elementType, "elementType is null").getTypeParameters(), Type.class));
-        this.fieldCount = elementType.getTypeParameters().size();
-        this.nullRowsEncountered = 0;
+        requireNonNull(elementType, "elementType is null");
+        checkArgument(elementType instanceof RowType, "elementType is not of RowType");
+        this.fieldTypes = ImmutableList.copyOf(elementType.getTypeParameters());
     }
 
     @Override
     public int getChannelCount()
     {
-        return fieldCount;
+        return fieldTypes.size();
     }
 
     @Override
-    int getInputEntryCount()
+    public void appendNext(PageBuilder pageBuilder, int outputChannelOffset)
     {
-        if (columnarArray == null) {
-            return 0;
-        }
-        return columnarArray.getPositionCount();
-    }
+        checkState(columnarRow != null, "columnarRow is null");
 
-    @Override
-    protected void resetColumnarStructure(Block block)
-    {
-        columnarArray = toColumnarArray(block);
-        columnarRow = toColumnarRow(columnarArray.getElementsBlock());
-        nullRowsEncountered = 0;
-    }
-
-    @Override
-    public void processCurrentPosition(int requireCount)
-    {
-        // Translate to row block index
-        int rowBlockIndex = columnarArray.getOffset(getCurrentPosition());
-
-        // Unnest current entry
-        for (int i = 0; i < getCurrentUnnestedLength(); i++) {
-            if (columnarRow.isNull(rowBlockIndex + i)) {
-                // Nulls have to be appended when Row element itself is null
-                for (int field = 0; field < fieldCount; field++) {
-                    getBlockBuilder(field).appendNull();
-                }
-                nullRowsEncountered++;
+        for (int i = 0; i < fieldTypes.size(); i++) {
+            BlockBuilder blockBuilder = pageBuilder.getBlockBuilder(outputChannelOffset + i);
+            if (columnarRow.isNull(position)) {
+                blockBuilder.appendNull();
             }
             else {
-                for (int field = 0; field < fieldCount; field++) {
-                    getBlockBuilder(field).appendElement(rowBlockIndex + i - nullRowsEncountered);
-                }
+                fieldTypes.get(i).appendTo(columnarRow.getField(i), nonNullPosition, blockBuilder);
             }
         }
-
-        // Append nulls if more output entries are needed
-        for (int i = 0; i < requireCount - getCurrentUnnestedLength(); i++) {
-            for (int field = 0; field < fieldCount; field++) {
-                getBlockBuilder(field).appendNull();
-            }
+        if (!columnarRow.isNull(position)) {
+            nonNullPosition++;
         }
+        position++;
     }
 
     @Override
-    protected Block getElementsBlock(int channel)
+    public boolean hasNext()
     {
-        checkState(channel >= 0 && channel < fieldCount, "Invalid channel number");
-        return columnarRow.getField(channel);
+        return position < positionCount;
     }
 
     @Override
-    protected int getElementsLength(int index)
+    public void setBlock(Block block)
     {
-        return columnarArray.getLength(index);
+        this.position = 0;
+        this.nonNullPosition = 0;
+        if (block == null) {
+            this.columnarRow = null;
+            this.positionCount = 0;
+        }
+        else {
+            this.columnarRow = ColumnarRow.toColumnarRow(block);
+            this.positionCount = block.getPositionCount();
+        }
     }
 }

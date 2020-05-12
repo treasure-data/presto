@@ -94,21 +94,9 @@ final class PrestoSystemRequirements
 
     private static void verifyJavaVersion()
     {
-        String javaVersion = StandardSystemProperty.JAVA_VERSION.value();
-        if (javaVersion == null) {
-            failRequirement("Java version not defined");
+        if (Runtime.version().feature() < 11) {
+            failRequirement("Presto requires Java 11+ (found %s)", Runtime.version());
         }
-
-        JavaVersion version = JavaVersion.parse(javaVersion);
-        if (version.getMajor() == 8 && version.getUpdate().isPresent() && version.getUpdate().getAsInt() >= 161) {
-            return;
-        }
-
-        if (version.getMajor() >= 9) {
-            return;
-        }
-
-        failRequirement("Presto requires Java 8u161+ (found %s)", javaVersion);
     }
 
     private static void verifyUsingG1Gc()

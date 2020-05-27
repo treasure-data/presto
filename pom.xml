@@ -1268,6 +1268,17 @@
         </plugins>
     </build>
 
+    <pluginRepositories>
+        <pluginRepository>
+            <id>treasuredata</id>
+            <name>treasuredata-releases</name>
+            <url>https://treasuredata.jfrog.io/treasuredata/libs-release</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </pluginRepository>
+    </pluginRepositories>
+
     <profiles>
         <profile>
             <id>tests-with-dependencies</id>

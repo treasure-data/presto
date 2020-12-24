@@ -2660,7 +2660,7 @@ class StatementAnalyzer
             ExpressionAnalysis expressionAnalysis;
             try {
                 expressionAnalysis = ExpressionAnalyzer.analyzeExpression(
-                        createViewSession(filter.getCatalog(), filter.getSchema(), Identity.forUser(filter.getIdentity()).build(), session.getPath()), // TODO: path should be included in row filter
+                        createViewSession(filter.getCatalog(), filter.getSchema(), filter.getIdentity(), session.getPath()), // TODO: path should be included in row filter
                         metadata,
                         accessControl,
                         sqlParser,
@@ -2714,7 +2714,7 @@ class StatementAnalyzer
             analysis.registerTableForColumnMasking(tableName, column, currentIdentity);
             try {
                 expressionAnalysis = ExpressionAnalyzer.analyzeExpression(
-                        createViewSession(mask.getCatalog(), mask.getSchema(), Identity.forUser(mask.getIdentity()).build(), session.getPath()), // TODO: path should be included in row filter
+                        createViewSession(mask.getCatalog(), mask.getSchema(), mask.getIdentity(), session.getPath()), // TODO: path should be included in row filter
                         metadata,
                         accessControl,
                         sqlParser,

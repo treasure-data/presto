@@ -5,18 +5,15 @@
 # allows us to deploy hotfixes or improvements before stable releases.
 #
 
+# EXCLUDE only that circle-ci cannot handle
 EXCLUDE_MODULES = %w|
- presto-atop presto-mongodb
- presto-cassandra presto-kafka presto-redis presto-docs
- presto-benchmark presto-benchmark-driver
- presto-example-http presto-base-jdbc
- presto-mysql presto-postgresql presto-hive
- presto-hive-hadoop1 presto-hive-hadoop2
- presto-verifier presto-testing-server-launcher presto-jmx
- presto-hive-cdh4 presto-hive-cdh5 presto-raptor presto-server-rpm
- presto-array presto-record-decoder presto-kafka presto-orc
- presto-local-file presto-ml presto-product-tests
- presto-server-rpm presto-plugin-toolkit|
+ presto-accumulo
+ presto-raptor-legacy
+ presto-mysql
+ presto-sqlserver
+ presto-kudu
+ presto-server-rpm
+|
 
 EXCLUDE_FROM_COMPILE = %w|presto-docs presto-server-rpm|
 
@@ -45,6 +42,7 @@ end
 
 desc "run tests"
 task "test" do
+  # use full test to verify a cherry-pick is fine
   sh "./mvnw -s settings.xml -P td -pl #{active_modules.join(",")} test"
 end
 

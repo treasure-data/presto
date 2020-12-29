@@ -35,21 +35,6 @@ public class TestExpressions
     }
 
     @Test
-    public void testBooleanExpressionInCase()
-    {
-        assertions.assertQuery("VALUES CASE 1 IS NULL WHEN true THEN 10 ELSE 20 END", "VALUES 20");
-        assertions.assertQuery("VALUES CASE 1 IS NOT NULL WHEN true THEN 10 ELSE 20 END", "VALUES 10");
-        assertions.assertQuery("VALUES CASE 1 BETWEEN 0 AND 2 WHEN true THEN 10 ELSE 20 END", "VALUES 10");
-        assertions.assertQuery("VALUES CASE 1 NOT BETWEEN 0 AND 2 WHEN true THEN 10 ELSE 20 END", "VALUES 20");
-        assertions.assertQuery("VALUES CASE 1 IN (1, 2) WHEN true THEN 10 ELSE 20 END", "VALUES 10");
-        assertions.assertQuery("VALUES CASE 1 NOT IN (1, 2) WHEN true THEN 10 ELSE 20 END", "VALUES 20");
-        assertions.assertQuery("VALUES CASE 1 = 1 WHEN true THEN 10 ELSE 20 END", "VALUES 10");
-        assertions.assertQuery("VALUES CASE 1 = 2 WHEN true THEN 10 ELSE 20 END", "VALUES 20");
-        assertions.assertQuery("VALUES CASE 1 < 2 WHEN true THEN 10 ELSE 20 END", "VALUES 10");
-        assertions.assertQuery("VALUES CASE 1 > 2 WHEN true THEN 10 ELSE 20 END", "VALUES 20");
-    }
-
-    @Test
     public void testInlineNullBind()
     {
         // https://github.com/prestosql/presto/issues/3411

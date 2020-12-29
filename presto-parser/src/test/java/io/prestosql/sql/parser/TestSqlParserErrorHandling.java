@@ -183,7 +183,7 @@ public class TestSqlParserErrorHandling
                         "OR (f()\n" +
                         "OR (f()\n" +
                         "GROUP BY id",
-                "line 24:1: mismatched input 'GROUP'. Expecting: ')', ',', '.', 'FILTER', 'IGNORE', 'OVER', 'RESPECT', '['");
+                "line 24:1: mismatched input 'GROUP'. Expecting: ')', ',', '.', 'FILTER', 'OVER', '['");
     }
 
     @Test(dataProvider = "statements")

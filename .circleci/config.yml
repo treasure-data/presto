@@ -38,9 +38,16 @@ jobs:
           name: Build presto
           command: |
             # Assign a unique version number to the modules
-            rake update-pom
+            sudo -E -u presto rake update-pom
             # Run mvn test-compile here to cache the compile-time dependencies
-            bundle exec rake compile
+            sudo -E -u presto bundle exec rake compile
+
+      - run:
+          name: Test presto
+          command: |
+            # Run mvn test-compile here to cache the compile-time dependencies
+            sudo -E -u presto bundle exec rake test
+
       - save_cache:
           paths:
             - /home/presto/.m2
@@ -50,7 +57,7 @@ jobs:
       - run:
           name: deploy
           command: |
-            bundle exec rake deploy
+            sudo -E -u presto bundle exec rake deploy
 workflows:
   version: 2
   build_and_integration:

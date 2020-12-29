@@ -915,15 +915,13 @@ public class TestAnalyzer
         assertFails("INSERT INTO t6 (a, A) SELECT * FROM t6")
                 .hasErrorCode(DUPLICATE_COLUMN_NAME);
 
-        // b is bigint, while a is double, coercion from b to a is possible
+        // b is bigint, while a is double, coercion is possible either way
         analyze("INSERT INTO t7 (b) SELECT (a) FROM t7 ");
-        assertFails("INSERT INTO t7 (a) SELECT (b) FROM t7")
-                .hasErrorCode(TYPE_MISMATCH);
+        analyze("INSERT INTO t7 (a) SELECT (b) FROM t7");
 
-        // d is array of bigints, while c is array of doubles, coercion from d to c is possible
+        // d is array of bigints, while c is array of doubles, coercion is possible either way
         analyze("INSERT INTO t7 (d) SELECT (c) FROM t7 ");
-        assertFails("INSERT INTO t7 (c) SELECT (d) FROM t7 ")
-                .hasErrorCode(TYPE_MISMATCH);
+        analyze("INSERT INTO t7 (c) SELECT (d) FROM t7 ");
 
         analyze("INSERT INTO t7 (d) VALUES (ARRAY[null])");
 

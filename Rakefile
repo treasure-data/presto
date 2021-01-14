@@ -11,6 +11,7 @@ EXCLUDE_MODULES = %w|
  presto-raptor-legacy
  presto-mysql
  presto-sqlserver
+ presto-kafka
  presto-kudu
  presto-server-rpm
 |

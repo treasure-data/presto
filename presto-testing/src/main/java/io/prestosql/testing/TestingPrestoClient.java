@@ -36,6 +36,7 @@ import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.VarcharType;
 import io.prestosql.type.SqlIntervalDayTime;
 import io.prestosql.type.SqlIntervalYearMonth;
+import okhttp3.OkHttpClient;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -102,6 +103,11 @@ public class TestingPrestoClient
     public TestingPrestoClient(TestingPrestoServer prestoServer, Session defaultSession)
     {
         super(prestoServer, defaultSession);
+    }
+
+    public TestingPrestoClient(TestingPrestoServer prestoServer, Session defaultSession, OkHttpClient httpClient)
+    {
+        super(prestoServer, defaultSession, httpClient);
     }
 
     @Override

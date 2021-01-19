@@ -57,13 +57,18 @@ public abstract class AbstractTestingPrestoClient<T>
 {
     private final TestingPrestoServer prestoServer;
     private final Session defaultSession;
-
-    private final OkHttpClient httpClient = new OkHttpClient();
+    private final OkHttpClient httpClient;
 
     protected AbstractTestingPrestoClient(TestingPrestoServer prestoServer, Session defaultSession)
     {
+        this(prestoServer, defaultSession, new OkHttpClient());
+    }
+
+    protected AbstractTestingPrestoClient(TestingPrestoServer prestoServer, Session defaultSession, OkHttpClient httpClient)
+    {
         this.prestoServer = requireNonNull(prestoServer, "prestoServer is null");
         this.defaultSession = requireNonNull(defaultSession, "defaultSession is null");
+        this.httpClient = requireNonNull(httpClient, "httpClient is null");
     }
 
     @Override

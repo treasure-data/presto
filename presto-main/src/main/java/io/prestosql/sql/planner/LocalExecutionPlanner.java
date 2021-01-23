@@ -610,11 +610,6 @@ public class LocalExecutionPlanner
             return ImmutableList.copyOf(driverFactories);
         }
 
-        public Session getSession()
-        {
-            return taskContext.getSession();
-        }
-
         public StageId getStageId()
         {
             return taskContext.getTaskId().getStageId();
@@ -1069,7 +1064,7 @@ public class LocalExecutionPlanner
                 outputChannels.add(i);
             }
 
-            boolean spillEnabled = isSpillEnabled(context.getSession()) && isSpillOrderBy(context.getSession());
+            boolean spillEnabled = isSpillEnabled(session) && isSpillOrderBy(session);
 
             OperatorFactory operator = new OrderByOperatorFactory(
                     context.getNextOperatorId(),
@@ -1178,8 +1173,8 @@ public class LocalExecutionPlanner
                 return planGlobalAggregation(node, source, context);
             }
 
-            boolean spillEnabled = isSpillEnabled(context.getSession());
-            DataSize unspillMemoryLimit = getAggregationOperatorUnspillMemoryLimit(context.getSession());
+            boolean spillEnabled = isSpillEnabled(session);
+            DataSize unspillMemoryLimit = getAggregationOperatorUnspillMemoryLimit(session);
 
             return planGroupByAggregation(node, source, spillEnabled, unspillMemoryLimit, context);
         }
@@ -1311,7 +1306,7 @@ public class LocalExecutionPlanner
             }
 
             Map<NodeRef<Expression>, Type> expressionTypes = typeAnalyzer.getTypes(
-                    context.getSession(),
+                    session,
                     context.getTypes(),
                     concat(staticFilters.map(ImmutableList::of).orElse(ImmutableList.of()), assignments.getExpressions()));
 
@@ -1426,10 +1421,10 @@ public class LocalExecutionPlanner
             PageBuilder pageBuilder = new PageBuilder(node.getRows().size(), outputTypes);
             for (List<Expression> row : node.getRows()) {
                 pageBuilder.declarePosition();
-                Map<NodeRef<Expression>, Type> expressionTypes = typeAnalyzer.getTypes(context.getSession(), TypeProvider.empty(), ImmutableList.copyOf(row));
+                Map<NodeRef<Expression>, Type> expressionTypes = typeAnalyzer.getTypes(session, TypeProvider.empty(), ImmutableList.copyOf(row));
                 for (int i = 0; i < row.size(); i++) {
                     // evaluate the literal value
-                    Object result = ExpressionInterpreter.expressionInterpreter(row.get(i), metadata, context.getSession(), expressionTypes).evaluate();
+                    Object result = ExpressionInterpreter.expressionInterpreter(row.get(i), metadata, session, expressionTypes).evaluate();
                     writeNativeValue(outputTypes.get(i), pageBuilder.getBlockBuilder(i), result);
                 }
             }
@@ -1994,7 +1989,7 @@ public class LocalExecutionPlanner
                             probeLayout,
                             buildLayout,
                             context.getTypes(),
-                            context.getSession()));
+                            session));
 
             Optional<Integer> partitionChannel = node.getRightPartitionSymbol().map(buildChannelGetter::apply);
 
@@ -2095,7 +2090,7 @@ public class LocalExecutionPlanner
                             probeSource.getLayout(),
                             buildSource.getLayout(),
                             context.getTypes(),
-                            context.getSession()));
+                            session));
 
             Optional<SortExpressionContext> sortExpressionContext = node.getFilter()
                     .flatMap(filter -> extractSortExpression(metadata, ImmutableSet.copyOf(node.getRight().getOutputSymbols()), filter));
@@ -2113,7 +2108,7 @@ public class LocalExecutionPlanner
                                     probeSource.getLayout(),
                                     buildSource.getLayout(),
                                     context.getTypes(),
-                                    context.getSession()))
+                                    session))
                             .collect(toImmutableList()))
                     .orElse(ImmutableList.of());
 
@@ -2137,9 +2132,9 @@ public class LocalExecutionPlanner
 
             ImmutableList.Builder<OperatorFactory> factoriesBuilder = new ImmutableList.Builder<>();
             factoriesBuilder.addAll(buildSource.getOperatorFactories());
-
+            int operatorId = buildContext.getNextOperatorId();
             createDynamicFilter(buildSource, node, context, partitionCount, localDynamicFilters).ifPresent(
-                    filter -> factoriesBuilder.add(createDynamicFilterSourceOperatorFactory(filter, node, buildSource, buildContext)));
+                    filter -> factoriesBuilder.add(createDynamicFilterSourceOperatorFactory(operatorId, filter, node, buildSource)));
 
             HashBuilderOperatorFactory hashBuilderOperatorFactory = new HashBuilderOperatorFactory(
                     buildContext.getNextOperatorId(),
@@ -2169,10 +2164,10 @@ public class LocalExecutionPlanner
         }
 
         private DynamicFilterSourceOperatorFactory createDynamicFilterSourceOperatorFactory(
+                int operatorId,
                 LocalDynamicFilterConsumer dynamicFilter,
                 JoinNode node,
-                PhysicalOperation buildSource,
-                LocalExecutionPlanContext context)
+                PhysicalOperation buildSource)
         {
             List<DynamicFilterSourceOperator.Channel> filterBuildChannels = dynamicFilter.getBuildChannels().entrySet().stream()
                     .map(entry -> {
@@ -2184,13 +2179,13 @@ public class LocalExecutionPlanner
                     .collect(Collectors.toList());
             boolean isReplicatedJoin = isBuildSideReplicated(node);
             return new DynamicFilterSourceOperatorFactory(
-                    context.getNextOperatorId(),
+                    operatorId,
                     node.getId(),
                     dynamicFilter.getTupleDomainConsumer(),
                     filterBuildChannels,
-                    getDynamicFilteringMaxDistinctValuesPerDriver(context.getSession(), isReplicatedJoin),
-                    getDynamicFilteringMaxSizePerDriver(context.getSession(), isReplicatedJoin),
-                    getDynamicFilteringRangeRowLimitPerDriver(context.getSession(), isReplicatedJoin),
+                    getDynamicFilteringMaxDistinctValuesPerDriver(session, isReplicatedJoin),
+                    getDynamicFilteringMaxSizePerDriver(session, isReplicatedJoin),
+                    getDynamicFilteringRangeRowLimitPerDriver(session, isReplicatedJoin),
                     blockTypeOperators);
         }
 
@@ -2333,9 +2328,9 @@ public class LocalExecutionPlanner
                         node.getId(),
                         filterConsumer.getTupleDomainConsumer(),
                         ImmutableList.of(new DynamicFilterSourceOperator.Channel(filterId, buildSource.getTypes().get(buildChannel), buildChannel)),
-                        getDynamicFilteringMaxDistinctValuesPerDriver(context.getSession(), isReplicatedJoin),
-                        getDynamicFilteringMaxSizePerDriver(context.getSession(), isReplicatedJoin),
-                        getDynamicFilteringRangeRowLimitPerDriver(context.getSession(), isReplicatedJoin),
+                        getDynamicFilteringMaxDistinctValuesPerDriver(session, isReplicatedJoin),
+                        getDynamicFilteringMaxSizePerDriver(session, isReplicatedJoin),
+                        getDynamicFilteringRangeRowLimitPerDriver(session, isReplicatedJoin),
                         blockTypeOperators));
             }
 

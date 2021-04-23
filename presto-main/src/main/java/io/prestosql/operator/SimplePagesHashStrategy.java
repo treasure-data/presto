@@ -39,7 +39,7 @@ public class SimplePagesHashStrategy
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(SimplePagesHashStrategy.class).instanceSize();
     private final List<Type> types;
-    private final List<BlockPositionComparison> comparisonOperators;
+    private List<BlockPositionComparison> comparisonOperators;
     private final List<Integer> outputChannels;
     private final List<List<Block>> channels;
     private final List<Integer> hashChannels;
@@ -48,6 +48,7 @@ public class SimplePagesHashStrategy
     private final List<BlockPositionEqual> equalOperators;
     private final List<BlockPositionHashCode> hashCodeOperators;
     private final List<BlockPositionIsDistinctFrom> isDistinctFromOperators;
+    private final BlockTypeOperators blockTypeOperators;
 
     public SimplePagesHashStrategy(
             List<Type> types,
@@ -59,9 +60,6 @@ public class SimplePagesHashStrategy
             BlockTypeOperators blockTypeOperators)
     {
         this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
-        this.comparisonOperators = types.stream()
-                .map(blockTypeOperators::getComparisonOperator)
-                .collect(toImmutableList());
         this.outputChannels = ImmutableList.copyOf(requireNonNull(outputChannels, "outputChannels is null"));
         this.channels = ImmutableList.copyOf(requireNonNull(channels, "channels is null"));
 
@@ -74,6 +72,7 @@ public class SimplePagesHashStrategy
             this.precomputedHashChannel = null;
         }
         this.sortChannel = requireNonNull(sortChannel, "sortChannel is null");
+        this.blockTypeOperators = requireNonNull(blockTypeOperators, "blockTypeOperators is null");
 
         this.equalOperators = hashChannels.stream()
                 .map(types::get)
@@ -242,6 +241,12 @@ public class SimplePagesHashStrategy
 
         Block leftBlock = channels.get(channel).get(leftBlockIndex);
         Block rightBlock = channels.get(channel).get(rightBlockIndex);
+
+        if (comparisonOperators == null) {
+            this.comparisonOperators = types.stream()
+                    .map(blockTypeOperators::getComparisonOperator)
+                    .collect(toImmutableList());
+        }
 
         return (int) comparisonOperators.get(channel).compare(leftBlock, leftBlockPosition, rightBlock, rightBlockPosition);
     }

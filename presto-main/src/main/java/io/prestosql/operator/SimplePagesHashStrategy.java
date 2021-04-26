@@ -30,6 +30,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static java.util.Objects.requireNonNull;
@@ -39,7 +40,7 @@ public class SimplePagesHashStrategy
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(SimplePagesHashStrategy.class).instanceSize();
     private final List<Type> types;
-    private final List<BlockPositionComparison> comparisonOperators;
+    private final List<Optional<BlockPositionComparison>> comparisonOperators;
     private final List<Integer> outputChannels;
     private final List<List<Block>> channels;
     private final List<Integer> hashChannels;
@@ -60,7 +61,7 @@ public class SimplePagesHashStrategy
     {
         this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
         this.comparisonOperators = types.stream()
-                .map(blockTypeOperators::getComparisonOperator)
+                .map(type -> type.isOrderable() ? Optional.of(blockTypeOperators.getComparisonOperator(type)) : Optional.<BlockPositionComparison>empty())
                 .collect(toImmutableList());
         this.outputChannels = ImmutableList.copyOf(requireNonNull(outputChannels, "outputChannels is null"));
         this.channels = ImmutableList.copyOf(requireNonNull(channels, "channels is null"));
@@ -239,11 +240,12 @@ public class SimplePagesHashStrategy
     public int compareSortChannelPositions(int leftBlockIndex, int leftBlockPosition, int rightBlockIndex, int rightBlockPosition)
     {
         int channel = getSortChannel();
+        checkState(comparisonOperators.get(channel).isPresent(), "type is not orderable");
 
         Block leftBlock = channels.get(channel).get(leftBlockIndex);
         Block rightBlock = channels.get(channel).get(rightBlockIndex);
 
-        return (int) comparisonOperators.get(channel).compare(leftBlock, leftBlockPosition, rightBlock, rightBlockPosition);
+        return (int) comparisonOperators.get(channel).get().compare(leftBlock, leftBlockPosition, rightBlock, rightBlockPosition);
     }
 
     @Override

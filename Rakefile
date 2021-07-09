@@ -124,8 +124,8 @@ EOF
     </repositories>
 EOF
 
-  REXML::XPath.first(pom, "/project").add_element(REXML::Document.new(distribution_management))
-  REXML::XPath.first(pom, "/project").add_element(REXML::Document.new(repositories))
+  REXML::XPath.first(pom, "/project").insert_after("modules", REXML::Document.new(repositories))
+  REXML::XPath.first(pom, "/project").insert_before("dependencyManagement", REXML::Document.new(distribution_management))
 
   # Dump pom.xml
   File.open('pom.xml', 'w'){|f| pom.write(f) }

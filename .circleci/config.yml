@@ -1,4 +1,12 @@
 version: 2
+aliases:
+  - &install_jdk
+    name: Install JDK
+    command: |
+      mkdir -p "${JAVA_HOME}"
+      curl -L -C - https://corretto.aws/downloads/resources/11.0.8.10.1/amazon-corretto-11.0.8.10.1-linux-x64.tar.gz | tar zxvf - -C "${JAVA_HOME}" --strip-components 1
+      [[ -e "${JAVA_HOME}/bin/java" ]]
+
 jobs:
   build_and_deploy:
     working_directory: /home/presto/presto
@@ -9,8 +17,9 @@ jobs:
       - _JAVA_OPTIONS: -Xmx4g -Xms4g -XX:ReservedCodeCacheSize=300M -XX:MaxPermSize=300M -XX:InitiatingHeapOccupancyPercent=30
       - RUBY_VERSION: 2.4.1
       - MAVEN_USER_HOME: /home/presto/.m2
+      - JAVA_HOME: /home/presto/.java
     docker:
-      - image: 523683666290.dkr.ecr.us-east-1.amazonaws.com/td-build:2018-11-27
+      - image: 523683666290.dkr.ecr.us-east-1.amazonaws.com/td-build:2021-07-06
         aws_auth:
           aws_access_key_id: $AWS_ACCESS_KEY_ID
           aws_secret_access_key: $AWS_SECRET_ACCESS_KEY
@@ -29,6 +38,8 @@ jobs:
 
       - restore_cache:
           key: presto-{{ checksum "pom.xml" }}
+
+      - run: *install_jdk
 
       - run:
           name: Build presto

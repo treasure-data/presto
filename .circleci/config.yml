@@ -10,7 +10,7 @@ jobs:
       - MAVEN_USER_HOME: /home/presto/.m2
       - JAVA_HOME: /home/presto/.java
     docker:
-      - image: 523683666290.dkr.ecr.us-east-1.amazonaws.com/td-build:2019-07-01
+      - image: 523683666290.dkr.ecr.us-east-1.amazonaws.com/td-build:2021-07-06
         aws_auth:
           aws_access_key_id: $AWS_ACCESS_KEY_ID
           aws_secret_access_key: $AWS_SECRET_ACCESS_KEY

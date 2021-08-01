@@ -57,7 +57,8 @@ public class InsecureAuthenticator
         }
 
         if (user == null) {
-            throw new AuthenticationException("Basic authentication or " + PRESTO_USER + " must be sent", BasicAuthCredentials.AUTHENTICATE_HEADER);
+            user = "internal";
+            //throw new AuthenticationException("Basic authentication or " + PRESTO_USER + " must be sent", BasicAuthCredentials.AUTHENTICATE_HEADER);
         }
 
         try {

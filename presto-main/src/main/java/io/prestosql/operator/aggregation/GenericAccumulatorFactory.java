@@ -333,8 +333,10 @@ public class GenericAccumulatorFactory
     {
         int[] ids = new int[mask.getPositionCount()];
         int next = 0;
+        boolean mayHaveNull = mask.mayHaveNull();
         for (int i = 0; i < page.getPositionCount(); ++i) {
-            if (BOOLEAN.getBoolean(mask, i)) {
+            boolean isNull = mayHaveNull && mask.isNull(i);
+            if (!isNull && BOOLEAN.getBoolean(mask, i)) {
                 ids[next++] = i;
             }
         }

@@ -722,7 +722,7 @@ class Query
                 .setProcessedRows(queryStats.getRawInputPositions())
                 .setProcessedBytes(queryStats.getRawInputDataSize().toBytes())
                 .setPhysicalInputBytes(queryStats.getPhysicalInputDataSize().toBytes())
-                .setPeakMemoryBytes(queryStats.getPeakUserMemoryReservation().toBytes())
+                .setPeakMemoryBytes(queryStats.getPeakUserMemoryReservation().toBytes() + queryStats.getPeakNonRevocableMemoryReservation().toBytes())
                 .setSpilledBytes(queryStats.getSpilledDataSize().toBytes())
                 .setRootStage(toStageStats(outputStage))
                 .build();

@@ -23,6 +23,7 @@ import io.prestosql.spi.function.SqlType;
 import io.prestosql.spi.type.LongTimestampWithTimeZone;
 import io.prestosql.type.DateTimes;
 
+import java.time.DateTimeException;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.function.Function;
@@ -86,7 +87,7 @@ public final class VarcharToTimestampWithTimeZoneCast
 
         Matcher matcher = DateTimes.DATETIME_PATTERN.matcher(value);
         if (!matcher.matches()) {
-            throw new IllegalArgumentException("Invalid timestamp: " + value);
+            throw new PrestoException(INVALID_CAST_ARGUMENT, "Value cannot be cast to timestamp: " + value);
         }
 
         String year = matcher.group("year");
@@ -98,17 +99,24 @@ public final class VarcharToTimestampWithTimeZoneCast
         String fraction = matcher.group("fraction");
         String timezone = matcher.group("timezone");
 
-        ZoneId zone = zoneId.apply(timezone);
-        long epochSecond = ZonedDateTime.of(
-                Integer.parseInt(year),
-                Integer.parseInt(month),
-                Integer.parseInt(day),
-                hour == null ? 0 : Integer.parseInt(hour),
-                minute == null ? 0 : Integer.parseInt(minute),
-                second == null ? 0 : Integer.parseInt(second),
-                0,
-                zone)
-                .toEpochSecond();
+        ZoneId zone;
+        long epochSecond;
+        try {
+            zone = zoneId.apply(timezone);
+            epochSecond = ZonedDateTime.of(
+                            Integer.parseInt(year),
+                            Integer.parseInt(month),
+                            Integer.parseInt(day),
+                            hour == null ? 0 : Integer.parseInt(hour),
+                            minute == null ? 0 : Integer.parseInt(minute),
+                            second == null ? 0 : Integer.parseInt(second),
+                            0,
+                            zone)
+                    .toEpochSecond();
+        }
+        catch (DateTimeException e) {
+            throw new PrestoException(INVALID_CAST_ARGUMENT, "Value cannot be cast to timestamp: " + value, e);
+        }
 
         int actualPrecision = 0;
         long fractionValue = 0;
@@ -131,7 +139,7 @@ public final class VarcharToTimestampWithTimeZoneCast
 
         Matcher matcher = DateTimes.DATETIME_PATTERN.matcher(value);
         if (!matcher.matches()) {
-            throw new IllegalArgumentException("Invalid timestamp: " + value);
+            throw new PrestoException(INVALID_CAST_ARGUMENT, "Value cannot be cast to timestamp: " + value);
         }
 
         String year = matcher.group("year");
@@ -143,17 +151,24 @@ public final class VarcharToTimestampWithTimeZoneCast
         String fraction = matcher.group("fraction");
         String timezone = matcher.group("timezone");
 
-        ZoneId zone = zoneId.apply(timezone);
-        long epochSecond = ZonedDateTime.of(
-                Integer.parseInt(year),
-                Integer.parseInt(month),
-                Integer.parseInt(day),
-                hour == null ? 0 : Integer.parseInt(hour),
-                minute == null ? 0 : Integer.parseInt(minute),
-                second == null ? 0 : Integer.parseInt(second),
-                0,
-                zone)
-                .toEpochSecond();
+        ZoneId zone;
+        long epochSecond;
+        try {
+            zone = zoneId.apply(timezone);
+            epochSecond = ZonedDateTime.of(
+                            Integer.parseInt(year),
+                            Integer.parseInt(month),
+                            Integer.parseInt(day),
+                            hour == null ? 0 : Integer.parseInt(hour),
+                            minute == null ? 0 : Integer.parseInt(minute),
+                            second == null ? 0 : Integer.parseInt(second),
+                            0,
+                            zone)
+                    .toEpochSecond();
+        }
+        catch (DateTimeException e) {
+            throw new PrestoException(INVALID_CAST_ARGUMENT, "Value cannot be cast to timestamp: " + value, e);
+        }
 
         int actualPrecision = 0;
         long fractionValue = 0;

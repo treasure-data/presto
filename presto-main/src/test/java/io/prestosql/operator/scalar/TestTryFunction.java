@@ -27,7 +27,9 @@ import static io.prestosql.spi.type.BooleanType.BOOLEAN;
 import static io.prestosql.spi.type.DecimalType.createDecimalType;
 import static io.prestosql.spi.type.DoubleType.DOUBLE;
 import static io.prestosql.spi.type.IntegerType.INTEGER;
+import static io.prestosql.spi.type.TimestampType.TIMESTAMP_MILLIS;
 import static io.prestosql.spi.type.TimestampType.createTimestampType;
+import static io.prestosql.spi.type.TimestampWithTimeZoneType.TIMESTAMP_TZ_MILLIS;
 import static io.prestosql.spi.type.VarcharType.createVarcharType;
 import static io.prestosql.type.JsonType.JSON;
 import static io.prestosql.type.UnknownType.UNKNOWN;
@@ -70,6 +72,9 @@ public class TestTryFunction
         assertFunction(createTryExpression("1/0"), INTEGER, null);
         assertFunction(createTryExpression("JSON_PARSE('INVALID')"), JSON, null);
         assertFunction(createTryExpression("CAST(NULL AS INTEGER)"), INTEGER, null);
+        assertFunction(createTryExpression("CAST('0000-00-01' AS TIMESTAMP)"), TIMESTAMP_MILLIS, null);
+        assertFunction(createTryExpression("CAST('0000-01-00' AS TIMESTAMP)"), TIMESTAMP_MILLIS, null);
+        assertFunction(createTryExpression("CAST('0000-01-01 ABC' AS TIMESTAMP WITH TIME ZONE)"), TIMESTAMP_TZ_MILLIS, null);
         assertFunction(createTryExpression("ABS(-9223372036854775807 - 1)"), BIGINT, null);
 
         // Exceptions that should not be suppressed

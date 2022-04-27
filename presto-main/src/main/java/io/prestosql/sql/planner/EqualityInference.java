@@ -24,6 +24,7 @@ import com.google.common.collect.Ordering;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.sql.tree.ComparisonExpression;
 import io.prestosql.sql.tree.Expression;
+import io.prestosql.sql.tree.SymbolReference;
 import io.prestosql.util.DisjointSet;
 
 import java.util.ArrayList;
@@ -321,16 +322,16 @@ public class EqualityInference
         }
 
         Collection<Expression> equivalences = equalitySets.get(canonicalIndex);
-//        if (expression instanceof SymbolReference) {
-//            boolean inScope = equivalences.stream()
-//                    .filter(SymbolReference.class::isInstance)
-//                    .map(Symbol::from)
-//                    .anyMatch(symbolScope);
-//
-//            if (!inScope) {
-//                return null;
-//            }
-//        }
+        if (expression instanceof SymbolReference) {
+            boolean inScope = equivalences.stream()
+                    .filter(SymbolReference.class::isInstance)
+                    .map(Symbol::from)
+                    .anyMatch(symbolScope);
+
+            if (!inScope) {
+                return null;
+            }
+        }
 
         Set<Expression> candidates = equivalences.stream()
                 .filter(e -> isScoped(e, symbolScope))

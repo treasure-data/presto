@@ -13,6 +13,7 @@
  */
 package io.prestosql.sql.planner.planprinter;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.CaseFormat;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
@@ -151,7 +152,8 @@ public class PlanPrinter
     private final ValuePrinter valuePrinter;
 
     // NOTE: do NOT add Metadata or Session to this class.  The plan printer must be usable outside of a transaction.
-    private PlanPrinter(
+    @VisibleForTesting
+    PlanPrinter(
             PlanNode planRoot,
             TypeProvider types,
             Optional<StageExecutionDescriptor> stageExecutionStrategy,
@@ -189,7 +191,8 @@ public class PlanPrinter
         return new TextRenderer(verbose, level).render(representation);
     }
 
-    private String toJson()
+    @VisibleForTesting
+    String toJson()
     {
         return new JsonRenderer().render(representation);
     }
@@ -203,6 +206,25 @@ public class PlanPrinter
         TableInfoSupplier tableInfoSupplier = new TableInfoSupplier(metadata, session);
         ValuePrinter valuePrinter = new ValuePrinter(metadata, session);
         return new PlanPrinter(root, typeProvider, Optional.empty(), tableInfoSupplier, valuePrinter, StatsAndCosts.empty(), Optional.empty()).toJson();
+    }
+
+    public static String jsonLogicalPlan(
+            PlanNode plan,
+            Session session,
+            TypeProvider types,
+            Metadata metadata,
+            StatsAndCosts estimatedStatsAndCosts)
+    {
+        TableInfoSupplier tableInfoSupplier = new TableInfoSupplier(metadata, session);
+        ValuePrinter valuePrinter = new ValuePrinter(metadata, session);
+        return new PlanPrinter(
+                plan,
+                types,
+                Optional.empty(),
+                tableInfoSupplier,
+                valuePrinter,
+                estimatedStatsAndCosts,
+                Optional.empty()).toJson();
     }
 
     public static String textLogicalPlan(

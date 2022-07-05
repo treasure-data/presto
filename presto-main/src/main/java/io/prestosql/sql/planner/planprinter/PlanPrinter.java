@@ -272,6 +272,39 @@ public class PlanPrinter
         return DISTRIBUTED_PLAN_CODEC.toJson(anonymizedPlan);
     }
 
+    public static String jsonDistributedPlan(SubPlan plan, Metadata metadata, Session session)
+    {
+        TableInfoSupplier tableInfoSupplier = new TableInfoSupplier(metadata, session);
+        ValuePrinter valuePrinter = new ValuePrinter(metadata, session);
+        TypeProvider typeProvider = getTypeProvider(plan.getAllFragments());
+        return jsonDistributedPlan(
+                plan.getAllFragments(),
+                tableInfoSupplier,
+                valuePrinter,
+                typeProvider);
+    }
+
+    private static String jsonDistributedPlan(
+            List<PlanFragment> fragments,
+            Function<TableScanNode, TableInfo> tableInfoSupplier,
+            ValuePrinter valuePrinter,
+            TypeProvider typeProvider)
+    {
+        Map<PlanFragmentId, JsonRenderedNode> anonymizedPlan = fragments.stream()
+                .collect(toImmutableMap(
+                        PlanFragment::getId,
+                        planFragment -> new PlanPrinter(
+                                planFragment.getRoot(),
+                                typeProvider,
+                                Optional.of(planFragment.getStageExecutionDescriptor()),
+                                tableInfoSupplier,
+                                valuePrinter,
+                                planFragment.getStatsAndCosts(),
+                                Optional.empty())
+                                .toJsonRenderedNode()));
+        return DISTRIBUTED_PLAN_CODEC.toJson(anonymizedPlan);
+    }
+
     public static String textLogicalPlan(
             PlanNode plan,
             TypeProvider types,

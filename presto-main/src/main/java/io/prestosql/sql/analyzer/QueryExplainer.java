@@ -49,6 +49,7 @@ import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.prestosql.sql.ParameterUtils.parameterExtractor;
 import static io.prestosql.sql.planner.LogicalPlanner.Stage.OPTIMIZED_AND_VALIDATED;
 import static io.prestosql.sql.planner.planprinter.IoPlanPrinter.textIoPlan;
+import static io.prestosql.sql.planner.planprinter.PlanPrinter.jsonDistributedPlan;
 import static io.prestosql.sql.planner.planprinter.PlanPrinter.jsonLogicalPlan;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -182,6 +183,9 @@ public class QueryExplainer
             case LOGICAL:
                 plan = getLogicalPlan(session, statement, parameters, warningCollector);
                 return jsonLogicalPlan(plan.getRoot(), session, plan.getTypes(), metadata, plan.getStatsAndCosts());
+            case DISTRIBUTED:
+                SubPlan subPlan = getDistributedPlan(session, statement, parameters, warningCollector);
+                return jsonDistributedPlan(subPlan, metadata, session);
             default:
                 throw new PrestoException(NOT_SUPPORTED, format("Unsupported explain plan type %s for JSON format", planType));
         }

@@ -17,13 +17,11 @@ package io.prestosql.sql.planner.planprinter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.json.JsonCodec;
-import io.prestosql.cost.PlanNodeStatsAndCostSummary;
 import io.prestosql.cost.StatsAndCosts;
 import io.prestosql.execution.TableInfo;
 import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.plugin.tpch.TpchConnectorFactory;
 import io.prestosql.spi.predicate.TupleDomain;
-import io.prestosql.sql.planner.OrderingScheme;
 import io.prestosql.sql.planner.PlanNodeIdAllocator;
 import io.prestosql.sql.planner.Symbol;
 import io.prestosql.sql.planner.iterative.rule.test.PlanBuilder;
@@ -37,10 +35,12 @@ import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 
 import static io.airlift.json.JsonCodec.jsonCodec;
+import static io.airlift.json.JsonCodec.mapJsonCodec;
 import static io.prestosql.SessionTestUtils.TEST_SESSION;
 import static io.prestosql.plugin.tpch.TpchMetadata.TINY_SCHEMA_NAME;
 import static io.prestosql.spi.type.BigintType.BIGINT;
@@ -56,6 +56,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestJsonRepresentation
 {
+    private static final JsonCodec<Map<String, JsonRenderedNode>> DISTRIBUTED_PLAN_JSON_CODEC = mapJsonCodec(String.class, JsonRenderedNode.class);
     private static final JsonCodec<JsonRenderedNode> JSON_RENDERED_NODE_CODEC = jsonCodec(JsonRenderedNode.class);
     private static final TableInfo TABLE_INFO = new TableInfo(
             new QualifiedObjectName("tpch", TINY_SCHEMA_NAME, "orders"),
@@ -68,6 +69,42 @@ public class TestJsonRepresentation
     {
         queryRunner = LocalQueryRunner.create(TEST_SESSION);
         queryRunner.createCatalog(TEST_SESSION.getCatalog().get(), new TpchConnectorFactory(1), ImmutableMap.of());
+    }
+
+    @Test
+    public void testDistributedJsonPlan()
+    {
+        MaterializedResult actualPlan = queryRunner.execute("EXPLAIN (TYPE DISTRIBUTED, FORMAT JSON) SELECT quantity FROM lineitem limit 10");
+        Map<String, JsonRenderedNode> distributedPlan = ImmutableMap.of(
+                "0", new JsonRenderedNode(
+                        "6",
+                        "Output",
+                        "[quantity]",
+                        "",
+                        ImmutableList.of(new JsonRenderedNode(
+                                "92",
+                                "Limit",
+                                "[10]",
+                                "",
+                                ImmutableList.of(new JsonRenderedNode(
+                                        "141",
+                                        "LocalExchange",
+                                        "[SINGLE] ()",
+                                        "",
+                                        ImmutableList.of(new JsonRenderedNode(
+                                                "0",
+                                                "TableScan",
+                                                "[tpch:lineitem:sf0.01, grouped = false]",
+                                                "quantity := tpch:quantity\n",
+                                                ImmutableList.of(),
+                                                ImmutableList.of())),
+                                        ImmutableList.of())),
+                                ImmutableList.of())),
+                        ImmutableList.of()));
+        MaterializedResult expectedPlan = resultBuilder(queryRunner.getDefaultSession(), createVarcharType(742))
+                .row(DISTRIBUTED_PLAN_JSON_CODEC.toJson(distributedPlan))
+                .build();
+        assertThat(actualPlan).isEqualTo(expectedPlan);
     }
 
     @Test

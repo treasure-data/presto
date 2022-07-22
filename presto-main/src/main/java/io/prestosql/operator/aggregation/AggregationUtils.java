@@ -14,6 +14,7 @@
 package io.prestosql.operator.aggregation;
 
 import com.google.common.base.CaseFormat;
+import io.prestosql.annotation.UsedByGeneratedCode;
 import io.prestosql.operator.aggregation.state.CentralMomentsState;
 import io.prestosql.operator.aggregation.state.CorrelationState;
 import io.prestosql.operator.aggregation.state.CovarianceState;
@@ -21,10 +22,13 @@ import io.prestosql.operator.aggregation.state.RegressionState;
 import io.prestosql.operator.aggregation.state.VarianceState;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
+import io.prestosql.spi.block.RunLengthEncodedBlock;
 import io.prestosql.spi.type.TypeSignature;
+import io.prestosql.sql.gen.CompilerOperations;
+
+import javax.annotation.Nullable;
 
 import java.util.List;
-import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Locale.ENGLISH;
@@ -241,9 +245,27 @@ public final class AggregationUtils
     }
 
     // used by aggregation compiler
+    @UsedByGeneratedCode
     @SuppressWarnings("UnusedDeclaration")
-    public static Function<Integer, Block> pageBlockGetter(final Page page)
+    public static Block extractMaskBlock(int maskChannel, Page page)
     {
-        return page::getBlock;
+        if (maskChannel < 0) {
+            return null;
+        }
+        Block maskBlock = page.getBlock(maskChannel);
+        if (page.getPositionCount() > 0 && maskBlock instanceof RunLengthEncodedBlock && CompilerOperations.testMask(maskBlock, 0)) {
+            return null; // filter out RLE true blocks to bypass unnecessary mask checks
+        }
+        return maskBlock;
+    }
+
+    @UsedByGeneratedCode
+    @SuppressWarnings("UnusedDeclaration")
+    public static boolean maskGuaranteedToFilterAllRows(int positions, @Nullable Block maskBlock)
+    {
+        if (maskBlock == null || positions == 0) {
+            return false;
+        }
+        return (maskBlock instanceof RunLengthEncodedBlock && !CompilerOperations.testMask(maskBlock, 0));
     }
 }

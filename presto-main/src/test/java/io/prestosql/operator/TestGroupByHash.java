@@ -22,6 +22,7 @@ import io.prestosql.spi.PageBuilder;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.DictionaryBlock;
 import io.prestosql.spi.block.DictionaryId;
+import io.prestosql.spi.block.LongArrayBlock;
 import io.prestosql.spi.block.RunLengthEncodedBlock;
 import io.prestosql.spi.block.VariableWidthBlock;
 import io.prestosql.spi.type.Type;
@@ -575,6 +576,42 @@ public class TestGroupByHash
         GroupByIdBlock results = work.getResult();
 
         assertThat(lowCardinalityResults.getGroupCount()).isEqualTo(results.getGroupCount());
+    }
+
+    @Test
+    public void testLowCardinalityDictionariesProperGroupIdOrder()
+    {
+        GroupByHash groupByHash = createGroupByHash(
+                TEST_SESSION,
+                ImmutableList.of(BIGINT, BIGINT),
+                new int[] {0, 1},
+                Optional.empty(),
+                100,
+                JOIN_COMPILER,
+                TYPE_OPERATOR_FACTORY);
+
+        Block dictionary = new LongArrayBlock(2, Optional.empty(), new long[] {0, 1});
+        int[] ids = new int[32];
+        for (int i = 0; i < 16; i++) {
+            ids[i] = 1;
+        }
+        Block block1 = new DictionaryBlock(dictionary, ids);
+        Block block2 = new DictionaryBlock(dictionary, ids);
+
+        Page page = new Page(block1, block2);
+
+        Work<GroupByIdBlock> work = groupByHash.getGroupIds(page);
+        assertThat(work).isInstanceOf(MultiChannelGroupByHash.GetLowCardinalityDictionaryGroupIdsWork.class);
+
+        work.process();
+        GroupByIdBlock results = work.getResult();
+        // Records with group id '0' should come before '1' despite being in the end of the block
+        for (int i = 0; i < 16; i++) {
+            assertThat(results.getGroupId(i)).isEqualTo(0);
+        }
+        for (int i = 16; i < 32; i++) {
+            assertThat(results.getGroupId(i)).isEqualTo(1);
+        }
     }
 
     @Test

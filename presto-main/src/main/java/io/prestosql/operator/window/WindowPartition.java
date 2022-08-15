@@ -19,6 +19,7 @@ import io.prestosql.operator.PagesIndex;
 import io.prestosql.operator.PagesIndexComparator;
 import io.prestosql.operator.WindowOperator.FrameBoundKey;
 import io.prestosql.spi.PageBuilder;
+import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.function.WindowIndex;
 import io.prestosql.sql.tree.FrameBound;
 import io.prestosql.sql.tree.FrameBound.Type;
@@ -209,6 +210,39 @@ public final class WindowPartition
                     range.getEnd());
             channel++;
         }
+
+        currentPosition++;
+    }
+
+    public void copyOutputs(PageBuilder pageBuilder, int[] positions)
+    {
+        // copy output channels
+        int channel = 0;
+        while (channel < outputChannels.length) {
+            for (int position : positions) {
+                pagesIndex.appendTo(outputChannels[channel], partitionStart + position, pageBuilder.getBlockBuilder(channel));
+            }
+            channel++;
+        }
+    }
+
+    public void processFixedSizeWindowNextRow(FramedWindowFunction framedFunction, BlockBuilder blockBuilder)
+    {
+        checkState(hasNext(), "No more rows in partition");
+
+        // DO NOT COPY OUTPUT CHANNEL
+        // check for new peer group
+        if (currentPosition == peerGroupEnd) {
+            updatePeerGroup();
+        }
+
+        Range range = getFrameRange(framedFunction.getFrame(), 0);
+        framedFunction.getFunction().processRow(
+                blockBuilder,
+                peerGroupStart - partitionStart,
+                peerGroupEnd - partitionStart - 1,
+                range.getStart(),
+                range.getEnd());
 
         currentPosition++;
     }

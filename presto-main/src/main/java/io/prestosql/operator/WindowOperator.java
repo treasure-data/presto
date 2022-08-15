@@ -31,7 +31,9 @@ import io.prestosql.operator.window.FramedWindowFunction;
 import io.prestosql.operator.window.WindowPartition;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PageBuilder;
+import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.connector.SortOrder;
+import io.prestosql.spi.function.FixedSizeWindowFunction;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spiller.Spiller;
 import io.prestosql.spiller.SpillerFactory;
@@ -276,6 +278,13 @@ public class WindowOperator
                 sortChannels,
                 windowFunctionDefinitions);
 
+        Optional<FramedWindowFunction> fixedSizeWindowFunction = Optional.empty();
+        for (FramedWindowFunction func : windowFunctions) {
+            if (func.getFunction() instanceof FixedSizeWindowFunction) {
+                checkArgument(windowFunctions.size() == 1, "only single FixedSizeWindowFunction allowed");
+                fixedSizeWindowFunction = Optional.of(func);
+            }
+        }
         if (spillEnabled) {
             PagesIndexWithHashStrategies mergedPagesIndexWithHashStrategies = new PagesIndexWithHashStrategies(
                     pagesIndexFactory,
@@ -302,6 +311,13 @@ public class WindowOperator
                     .flatTransform(spillablePagesToPagesIndexes.get())
                     .flatMap(this::pagesIndexToWindowPartitions)
                     .transform(new WindowPartitionsToOutputPages());
+        }
+        else if (fixedSizeWindowFunction.isPresent()) {
+            this.spillablePagesToPagesIndexes = Optional.empty();
+            this.outputPages = pageBuffer.pages()
+                    .transform(new PagesToPagesIndexes(inMemoryPagesIndexWithHashStrategies, orderChannels, ordering))
+                    .flatMap(this::pagesIndexToWindowPartitions)
+                    .transform(new FixedSizeWindowPartitionsToOutputPages(fixedSizeWindowFunction.get()));
         }
         else {
             this.spillablePagesToPagesIndexes = Optional.empty();
@@ -604,6 +620,70 @@ public class WindowOperator
             Page page = pageBuilder.build();
             pageBuilder.reset();
             return TransformationState.ofResult(page, !partition.hasNext());
+        }
+    }
+
+    private class FixedSizeWindowPartitionsToOutputPages
+            implements Transformation<WindowPartition, Page>
+    {
+        BlockBuilder windowBlockBuilder;
+        final PageBuilder pageBuilder;
+        final FramedWindowFunction framedFunction;
+        final FixedSizeWindowFunction function;
+
+        FixedSizeWindowPartitionsToOutputPages(FramedWindowFunction framedFunction)
+        {
+            windowBlockBuilder = outputTypes.get(outputTypes.size() - 1).createBlockBuilder(null, 1024);
+            pageBuilder = new PageBuilder(outputTypes);
+            this.framedFunction = framedFunction;
+            this.function = ((FixedSizeWindowFunction) framedFunction.getFunction());
+        }
+
+        @Override
+        public TransformationState<Page> process(WindowPartition partition)
+        {
+            boolean finishing = partition == null;
+            if (finishing) {
+                if (windowBlockBuilder.getPositionCount() == 0) {
+                    if (pageBuilder.isEmpty()) {
+                        return TransformationState.finished();
+                    }
+                }
+                else {
+                    int[] positions = function.selectPositions(windowBlockBuilder.getPositionCount());
+                    copyPositions(partition, positions);
+                }
+
+                // Output the remaining page if we have anything buffered
+                Page page = pageBuilder.build();
+                pageBuilder.reset();
+                return TransformationState.ofResult(page, false);
+            }
+
+            // process whole partition without output channels for unwanted copy and memory usage
+            while (partition.hasNext()) {
+                partition.processFixedSizeWindowNextRow(framedFunction, windowBlockBuilder);
+            }
+            int[] positions = function.selectPositions(windowBlockBuilder.getPositionCount());
+            copyPositions(partition, positions);
+
+            if (!pageBuilder.isFull()) {
+                return needsMoreData();
+            }
+
+            Page page = pageBuilder.build();
+            pageBuilder.reset();
+            return TransformationState.ofResult(page, !partition.hasNext());
+        }
+
+        private void copyPositions(WindowPartition partition, int[] positions)
+        {
+            partition.copyOutputs(pageBuilder, positions);
+            for (int position : positions) {
+                windowBlockBuilder.writePositionTo(position, pageBuilder.getBlockBuilder(outputChannels.length));
+            }
+            pageBuilder.declarePositions(positions.length);
+            windowBlockBuilder = windowBlockBuilder.newBlockBuilderLike(null);
         }
     }
 

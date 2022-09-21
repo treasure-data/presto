@@ -6,19 +6,22 @@
 #
 
 EXCLUDE_MODULES = %w|
+ presto-accumulo presto-accumulo-iterators
  presto-atop presto-mongodb
- presto-cassandra presto-kafka presto-redis presto-docs
- presto-benchmark presto-benchmark-driver
- presto-example-http presto-base-jdbc
- presto-mysql presto-postgresql presto-hive
- presto-hive-hadoop1 presto-hive-hadoop2
- presto-verifier presto-testing-server-launcher presto-jmx
- presto-hive-cdh4 presto-hive-cdh5 presto-raptor presto-server-rpm
- presto-array presto-record-decoder presto-kafka presto-orc
- presto-local-file presto-ml presto-product-tests
- presto-server-rpm presto-plugin-toolkit|
-
-EXCLUDE_FROM_COMPILE = %w|presto-docs presto-server-rpm|
+ presto-cassandra presto-kafka presto-testing-kafka presto-redis presto-docs
+ presto-benchmark-driver presto-benchto-benchmarks
+ presto-bigquery presto-druid presto-elasticsearch presto-google-sheets
+ presto-iceberg presto-kinesis presto-kudu presto-memsql presto-phoenix
+ presto-pinot presto-prometheus presto-proxy presto-raptor-legacy
+ presto-thrift presto-thrift-api presto-thrift-testing-server
+ presto-example-http presto-sqlserver
+ presto-mysql presto-oracle
+ presto-verifier presto-testing-server-launcher
+ presto-raptor presto-server-rpm
+ presto-record-decoder
+ presto-local-file presto-ml presto-product-tests presto-product-tests-launcher
+ presto-test-jdbc-compatibility-old-driver presto-test-jdbc-compatibility-old-server
+ presto-session-property-managers|
 
 def presto_modules
   require "rexml/document"
@@ -34,13 +37,9 @@ def active_modules
   presto_modules.keep_if{|m| !EXCLUDE_MODULES.include?(m) }
 end
 
-def compile_target_modules
-  presto_modules.keep_if{|m| !EXCLUDE_FROM_COMPILE.include?(m) }
-end
-
 desc "compile codes"
 task "compile" do
-  sh "./mvnw -s settings.xml test-compile -pl #{compile_target_modules.join(",")} -DskipTests"
+  sh "./mvnw -s settings.xml test-compile -pl #{active_modules.join(",")} -DskipTests"
 end
 
 desc "run tests"
@@ -48,8 +47,35 @@ task "test" do
   sh "./mvnw -s settings.xml -P td -pl #{active_modules.join(",")} test"
 end
 
+desc "install to local repository"
+task "install" do
+  sh "./mvnw -s settings.xml -P td -pl #{active_modules.join(",")} install -DskipTests"
+end
+
+desc "exclude unnecessary modules from presto-server provisioning"
+task "update-provisio-modules" do
+  require "rexml/document"
+  provisio = REXML::Document.new(File.read("presto-server/src/main/provisio/presto.xml"))
+  EXCLUDE_MODULES.each{|m|
+    provisio.delete_element("/runtime/artifactSet[contains(artifact/@id, ':#{m}:zip:')]")
+  }
+  File.open('presto-server/src/main/provisio/presto.xml', 'w'){|f| provisio.write(f) }
+end
+
+desc "exclude unnecessary modules from pom.xml"
+task "update-pom-modules" do
+  require "rexml/document"
+  pom = REXML::Document.new(File.read("pom.xml"))
+  # delete unnecessary modules from pom.xml
+  EXCLUDE_MODULES.each{|m|
+     pom.delete_element("/project/modules/module[text()='#{m}']")
+  }
+  # Dump pom.xml
+  File.open('pom.xml', 'w'){|f| pom.write(f) }
+end
+
 desc "set a unique version and td-specific settings"
-task "update-pom" do
+task "update-pom-version" do
   require "rexml/document"
 
   # Read the current presto version
@@ -63,11 +89,6 @@ task "update-pom" do
 
   # Reload pom.xml
   pom = REXML::Document.new(File.read("pom.xml"))
-
-  # delete unncessary modules from pom.xml
-  # EXCLUDE_MODULES.each{|m|
-  #    pom.delete_element("/project/modules/module[text()='#{m}']")
-  # }
 
   # Inject extension plugin to deploy artifacts to s3
   extension = <<EOF
@@ -139,6 +160,6 @@ task "deploy" do
   # Deploy
   # Deploy presto-root
   sh "./mvnw -s settings.xml deploy -P td -N -DskipTests"
-  # Deploy presot modules
-  sh "./mvnw -s settings.xml deploy -P td -pl #{compile_target_modules.join(",")} -DskipTests"
+  # Deploy presto modules
+  sh "./mvnw -s settings.xml deploy -P td -pl #{active_modules.join(",")} -DskipTests"
 end

@@ -22,6 +22,8 @@ import io.prestosql.array.LongBigArray;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PageBuilder;
 import io.prestosql.spi.block.Block;
+import io.prestosql.spi.block.DictionaryBlock;
+import io.prestosql.spi.block.RunLengthEncodedBlock;
 import io.prestosql.spi.type.AbstractLongType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeOperators;
@@ -53,6 +55,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 import static io.prestosql.operator.UpdateMemory.NOOP;
 import static io.prestosql.spi.type.BigintType.BIGINT;
@@ -196,7 +199,7 @@ public class BenchmarkGroupByHash
         return groupIds;
     }
 
-    private static List<Page> createBigintPages(int positionCount, int groupCount, int channelCount, boolean hashEnabled)
+    private static List<Page> createBigintPages(int positionCount, int groupCount, int channelCount, boolean hashEnabled, boolean pollute)
     {
         List<Type> types = Collections.nCopies(channelCount, BIGINT);
         ImmutableList.Builder<Page> pages = ImmutableList.builder();
@@ -205,6 +208,7 @@ public class BenchmarkGroupByHash
         }
 
         PageBuilder pageBuilder = new PageBuilder(types);
+        int pageCount = 0;
         for (int position = 0; position < positionCount; position++) {
             int rand = ThreadLocalRandom.current().nextInt(groupCount);
             pageBuilder.declarePosition();
@@ -215,8 +219,34 @@ public class BenchmarkGroupByHash
                 BIGINT.writeLong(pageBuilder.getBlockBuilder(channelCount), AbstractLongType.hash((long) rand));
             }
             if (pageBuilder.isFull()) {
-                pages.add(pageBuilder.build());
+                Page page = pageBuilder.build();
                 pageBuilder.reset();
+                if (pollute) {
+                    if (pageCount % 3 == 0) {
+                        pages.add(page);
+                    }
+                    else if (pageCount % 3 == 1) {
+                        // rle page
+                        Block[] blocks = new Block[page.getChannelCount()];
+                        for (int channel = 0; channel < blocks.length; ++channel) {
+                            blocks[channel] = new RunLengthEncodedBlock(page.getBlock(channel).getSingleValueBlock(0), page.getPositionCount());
+                        }
+                        pages.add(new Page(blocks));
+                    }
+                    else {
+                        // dictionary page
+                        int[] positions = IntStream.range(0, page.getPositionCount()).toArray();
+                        Block[] blocks = new Block[page.getChannelCount()];
+                        for (int channel = 0; channel < page.getChannelCount(); ++channel) {
+                            blocks[channel] = new DictionaryBlock(page.getBlock(channel), positions);
+                        }
+                        pages.add(new Page(blocks));
+                    }
+                }
+                else {
+                    pages.add(page);
+                }
+                pageCount++;
             }
         }
         pages.add(pageBuilder.build());
@@ -269,7 +299,7 @@ public class BenchmarkGroupByHash
         @Setup
         public void setup()
         {
-            pages = createBigintPages(POSITIONS, groupCount, channelCount, hashEnabled);
+            pages = createBigintPages(POSITIONS, groupCount, channelCount, hashEnabled, false);
         }
 
         public List<Page> getPages()
@@ -295,7 +325,12 @@ public class BenchmarkGroupByHash
         @Setup
         public void setup()
         {
-            pages = createBigintPages(POSITIONS, GROUP_COUNT, channelCount, hashEnabled);
+            setup(false);
+        }
+
+        public void setup(boolean pollute)
+        {
+            pages = createBigintPages(POSITIONS, GROUP_COUNT, channelCount, hashEnabled, pollute);
             types = Collections.nCopies(1, BIGINT);
             channels = new int[1];
             for (int i = 0; i < 1; i++) {
@@ -351,7 +386,7 @@ public class BenchmarkGroupByHash
                     break;
                 case "BIGINT":
                     types = Collections.nCopies(channelCount, BIGINT);
-                    pages = createBigintPages(POSITIONS, groupCount, channelCount, hashEnabled);
+                    pages = createBigintPages(POSITIONS, groupCount, channelCount, hashEnabled, false);
                     break;
                 default:
                     throw new UnsupportedOperationException("Unsupported dataType");
@@ -387,6 +422,16 @@ public class BenchmarkGroupByHash
     private static JoinCompiler getJoinCompiler()
     {
         return new JoinCompiler(TYPE_OPERATORS);
+    }
+
+    static {
+        // pollute BigintGroupByHash profile by different block types
+        SingleChannelBenchmarkData singleChannelBenchmarkData = new SingleChannelBenchmarkData();
+        singleChannelBenchmarkData.setup(true);
+        BenchmarkGroupByHash hash = new BenchmarkGroupByHash();
+        for (int i = 0; i < 5; ++i) {
+            hash.bigintGroupByHash(singleChannelBenchmarkData);
+        }
     }
 
     public static void main(String[] args)

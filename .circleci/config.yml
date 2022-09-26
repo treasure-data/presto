@@ -44,8 +44,12 @@ jobs:
       - run:
           name: Build presto
           command: |
+            # Exclude unnecessary modules from pom.xml
+            rake update-pom-modules
             # Assign a unique version number to the modules
-            rake update-pom
+            rake update-pom-version
+            # Exclude unnecessary modules from presto-server provisioning
+            rake update-provisio-modules
             # Run mvn test-compile here to cache the compile-time dependencies
             rake compile
 

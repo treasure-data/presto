@@ -36,7 +36,9 @@ public class TestPredicatePushdown
         assertions = null;
     }
 
-    @Test
+    // This test fails because it assumes prevention of constants pushdown reverted in
+    // https://github.com/treasure-data/presto/pull/42 to avoid performance degradation in some cases.
+    @Test(enabled = false)
     public void testConditionalExpressionWithFailingExpression()
     {
         assertThat(assertions.query("" +

@@ -13,11 +13,13 @@
  */
 package io.prestosql.sql.planner.planprinter;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.CaseFormat;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Streams;
+import io.airlift.json.JsonCodec;
 import io.airlift.units.Duration;
 import io.prestosql.Session;
 import io.prestosql.cost.PlanCostEstimate;
@@ -96,6 +98,7 @@ import io.prestosql.sql.planner.plan.UnionNode;
 import io.prestosql.sql.planner.plan.UnnestNode;
 import io.prestosql.sql.planner.plan.ValuesNode;
 import io.prestosql.sql.planner.plan.WindowNode;
+import io.prestosql.sql.planner.planprinter.JsonRenderer.JsonRenderedNode;
 import io.prestosql.sql.planner.planprinter.NodeRepresentation.TypedSymbol;
 import io.prestosql.sql.tree.ComparisonExpression;
 import io.prestosql.sql.tree.Expression;
@@ -126,6 +129,7 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
+import static io.airlift.json.JsonCodec.mapJsonCodec;
 import static io.prestosql.execution.StageInfo.getAllStages;
 import static io.prestosql.metadata.ResolvedFunction.extractFunctionName;
 import static io.prestosql.operator.StageExecutionDescriptor.ungroupedExecution;
@@ -146,12 +150,16 @@ import static java.util.stream.Collectors.toList;
 
 public class PlanPrinter
 {
+    private static final JsonCodec<Map<PlanFragmentId, JsonRenderedNode>> DISTRIBUTED_PLAN_CODEC =
+            mapJsonCodec(PlanFragmentId.class, JsonRenderedNode.class);
+
     private final PlanRepresentation representation;
     private final Function<TableScanNode, TableInfo> tableInfoSupplier;
     private final ValuePrinter valuePrinter;
 
     // NOTE: do NOT add Metadata or Session to this class.  The plan printer must be usable outside of a transaction.
-    private PlanPrinter(
+    @VisibleForTesting
+    PlanPrinter(
             PlanNode planRoot,
             TypeProvider types,
             Optional<StageExecutionDescriptor> stageExecutionStrategy,
@@ -189,9 +197,15 @@ public class PlanPrinter
         return new TextRenderer(verbose, level).render(representation);
     }
 
-    private String toJson()
+    @VisibleForTesting
+    String toJson()
     {
         return new JsonRenderer().render(representation);
+    }
+
+    JsonRenderedNode toJsonRenderedNode()
+    {
+        return new JsonRenderer().renderJson(representation, representation.getRoot());
     }
 
     public static String jsonFragmentPlan(PlanNode root, Map<Symbol, Type> symbols, Metadata metadata, Session session)
@@ -203,6 +217,92 @@ public class PlanPrinter
         TableInfoSupplier tableInfoSupplier = new TableInfoSupplier(metadata, session);
         ValuePrinter valuePrinter = new ValuePrinter(metadata, session);
         return new PlanPrinter(root, typeProvider, Optional.empty(), tableInfoSupplier, valuePrinter, StatsAndCosts.empty(), Optional.empty()).toJson();
+    }
+
+    public static String jsonLogicalPlan(
+            PlanNode plan,
+            Session session,
+            TypeProvider types,
+            Metadata metadata,
+            StatsAndCosts estimatedStatsAndCosts)
+    {
+        TableInfoSupplier tableInfoSupplier = new TableInfoSupplier(metadata, session);
+        ValuePrinter valuePrinter = new ValuePrinter(metadata, session);
+        return new PlanPrinter(
+                plan,
+                types,
+                Optional.empty(),
+                tableInfoSupplier,
+                valuePrinter,
+                estimatedStatsAndCosts,
+                Optional.empty()).toJson();
+    }
+
+    public static String jsonDistributedPlan(
+            StageInfo outputStageInfo,
+            Session session,
+            Metadata metadata)
+    {
+        List<StageInfo> allStages = getAllStages(Optional.of(outputStageInfo));
+        TypeProvider types = getTypeProvider(allStages.stream()
+                .map(StageInfo::getPlan)
+                .collect(toImmutableList()));
+        Map<PlanNodeId, TableInfo> tableInfos = allStages.stream()
+                .map(StageInfo::getTables)
+                .map(Map::entrySet)
+                .flatMap(Collection::stream)
+                .collect(toImmutableMap(Map.Entry::getKey, Map.Entry::getValue));
+
+        ValuePrinter valuePrinter = new ValuePrinter(metadata, session);
+
+        Map<PlanFragmentId, JsonRenderedNode> anonymizedPlan = allStages.stream()
+                .map(StageInfo::getPlan)
+                .filter(Objects::nonNull)
+                .collect(toImmutableMap(
+                        PlanFragment::getId,
+                        planFragment -> new PlanPrinter(
+                                planFragment.getRoot(),
+                                types,
+                                Optional.of(planFragment.getStageExecutionDescriptor()),
+                                tableScanNode -> tableInfos.get(tableScanNode.getId()),
+                                valuePrinter,
+                                planFragment.getStatsAndCosts(),
+                                Optional.empty())
+                                .toJsonRenderedNode()));
+        return DISTRIBUTED_PLAN_CODEC.toJson(anonymizedPlan);
+    }
+
+    public static String jsonDistributedPlan(SubPlan plan, Metadata metadata, Session session)
+    {
+        TableInfoSupplier tableInfoSupplier = new TableInfoSupplier(metadata, session);
+        ValuePrinter valuePrinter = new ValuePrinter(metadata, session);
+        TypeProvider typeProvider = getTypeProvider(plan.getAllFragments());
+        return jsonDistributedPlan(
+                plan.getAllFragments(),
+                tableInfoSupplier,
+                valuePrinter,
+                typeProvider);
+    }
+
+    private static String jsonDistributedPlan(
+            List<PlanFragment> fragments,
+            Function<TableScanNode, TableInfo> tableInfoSupplier,
+            ValuePrinter valuePrinter,
+            TypeProvider typeProvider)
+    {
+        Map<PlanFragmentId, JsonRenderedNode> anonymizedPlan = fragments.stream()
+                .collect(toImmutableMap(
+                        PlanFragment::getId,
+                        planFragment -> new PlanPrinter(
+                                planFragment.getRoot(),
+                                typeProvider,
+                                Optional.of(planFragment.getStageExecutionDescriptor()),
+                                tableInfoSupplier,
+                                valuePrinter,
+                                planFragment.getStatsAndCosts(),
+                                Optional.empty())
+                                .toJsonRenderedNode()));
+        return DISTRIBUTED_PLAN_CODEC.toJson(anonymizedPlan);
     }
 
     public static String textLogicalPlan(

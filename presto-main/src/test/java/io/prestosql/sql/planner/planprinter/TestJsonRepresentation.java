@@ -80,28 +80,32 @@ public class TestJsonRepresentation
                         "6",
                         "Output",
                         "[quantity]",
+                        ImmutableList.of(typedSymbol("quantity", "double")),
                         "",
                         ImmutableList.of(new JsonRenderedNode(
                                 "92",
                                 "Limit",
                                 "[10]",
+                                ImmutableList.of(typedSymbol("quantity", "double")),
                                 "",
                                 ImmutableList.of(new JsonRenderedNode(
                                         "141",
                                         "LocalExchange",
                                         "[SINGLE] ()",
+                                        ImmutableList.of(typedSymbol("quantity", "double")),
                                         "",
                                         ImmutableList.of(new JsonRenderedNode(
                                                 "0",
                                                 "TableScan",
                                                 "[tpch:lineitem:sf0.01, grouped = false]",
+                                                ImmutableList.of(typedSymbol("quantity", "double")),
                                                 "quantity := tpch:quantity\n",
                                                 ImmutableList.of(),
                                                 ImmutableList.of())),
                                         ImmutableList.of())),
                                 ImmutableList.of())),
                         ImmutableList.of()));
-        MaterializedResult expectedPlan = resultBuilder(queryRunner.getDefaultSession(), createVarcharType(742))
+        MaterializedResult expectedPlan = resultBuilder(queryRunner.getDefaultSession(), createVarcharType(1118))
                 .row(DISTRIBUTED_PLAN_JSON_CODEC.toJson(distributedPlan))
                 .build();
         assertThat(actualPlan).isEqualTo(expectedPlan);
@@ -115,28 +119,32 @@ public class TestJsonRepresentation
                 "6",
                 "Output",
                 "[quantity]",
+                ImmutableList.of(typedSymbol("quantity", "double")),
                 "",
                 ImmutableList.of(new JsonRenderedNode(
                         "92",
                         "Limit",
                         "[10]",
+                        ImmutableList.of(typedSymbol("quantity", "double")),
                         "",
                         ImmutableList.of(new JsonRenderedNode(
                                 "141",
                                 "LocalExchange",
                                 "[SINGLE] ()",
+                                ImmutableList.of(typedSymbol("quantity", "double")),
                                 "",
                                 ImmutableList.of(new JsonRenderedNode(
                                         "0",
                                         "TableScan",
                                         "[tpch:lineitem:sf0.01]",
+                                        ImmutableList.of(typedSymbol("quantity", "double")),
                                         "quantity := tpch:quantity\n",
                                         ImmutableList.of(),
                                         ImmutableList.of())),
                                 ImmutableList.of())),
                         ImmutableList.of())),
                 ImmutableList.of());
-        MaterializedResult expectedPlan = resultBuilder(queryRunner.getDefaultSession(), createVarcharType(657))
+        MaterializedResult expectedPlan = resultBuilder(queryRunner.getDefaultSession(), createVarcharType(1001))
                 .row(JSON_RENDERED_NODE_CODEC.toJson(expectedJsonNode))
                 .build();
         assertThat(actualPlan).isEqualTo(expectedPlan);
@@ -155,6 +163,10 @@ public class TestJsonRepresentation
                         "1",
                         "Aggregate(FINAL)[y, z]",
                         "",
+                        ImmutableList.of(
+                                typedSymbol("y", "bigint"),
+                                typedSymbol("z", "bigint"),
+                                typedSymbol("sum", "bigint")),
                         "sum := sum(\"x\")\n",
                         ImmutableList.of(valuesRepresentation(
                                 "0",
@@ -181,6 +193,7 @@ public class TestJsonRepresentation
                         "2",
                         "InnerJoin",
                         "[(\"a\" = \"d\")]",
+                        ImmutableList.of(typedSymbol("b", "bigint")),
                         "dynamicFilterAssignments = {d -> #DF}",
                         ImmutableList.of(
                                 valuesRepresentation("0", ImmutableList.of(typedSymbol("a", "bigint"), typedSymbol("b", "bigint"))),
@@ -203,6 +216,7 @@ public class TestJsonRepresentation
                         "0",
                         "RemoteSource",
                         "[1,2]",
+                        ImmutableList.of(typedSymbol("a", "bigint"), typedSymbol("b", "bigint")),
                         "",
                         ImmutableList.of(),
                         ImmutableList.of("1", "2")));
@@ -214,6 +228,7 @@ public class TestJsonRepresentation
                 id,
                 "Values",
                 "",
+                outputs,
                 "",
                 ImmutableList.of(),
                 ImmutableList.of());

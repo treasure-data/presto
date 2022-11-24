@@ -49,8 +49,8 @@ jobs:
 
       - run:
           name: Build presto
-          environment:
-            MAVEN_OPTS: "true"
+          # environment:
+          #   MAVEN_OPTS: "true"
           command: |
             # Assign a unique version number to the modules
             rake update-pom

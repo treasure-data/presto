@@ -43,14 +43,7 @@ jobs:
       - run: *install_jdk
 
       - run:
-          name: Debug
-          command: |
-            echo $MAVEN_OPTS | base64
-
-      - run:
           name: Build presto
-          # environment:
-          #   MAVEN_OPTS: "true"
           command: |
             # Assign a unique version number to the modules
             rake update-pom

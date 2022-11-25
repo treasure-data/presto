@@ -1,3 +1,4 @@
+---
 version: 2
 aliases:
   - &install_jdk
@@ -69,8 +70,9 @@ workflows:
   build_and_integration:
     jobs:
       - build_and_deploy:
+          context:
+            - aws-td
+            - jfrog
           filters:
             tags:
               only: /.*/
-
-

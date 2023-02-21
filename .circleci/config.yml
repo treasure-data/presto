@@ -16,11 +16,11 @@ jobs:
       - RUN_SUBTREE_TEST: true
       - MAVEN_OPTS: -Xmx4g -Xms4g
       - _JAVA_OPTIONS: -Xmx4g -Xms4g -XX:ReservedCodeCacheSize=300M -XX:MaxPermSize=300M -XX:InitiatingHeapOccupancyPercent=30
-      - RUBY_VERSION: 2.4.1
+      - RUBY_VERSION: 3.1.2
       - MAVEN_USER_HOME: /home/presto/.m2
       - JAVA_HOME: /home/presto/.java
     docker:
-      - image: 523683666290.dkr.ecr.us-east-1.amazonaws.com/td-build:2021-07-06
+      - image: 523683666290.dkr.ecr.us-east-1.amazonaws.com/td-build:latest
         aws_auth:
           aws_access_key_id: $AWS_ACCESS_KEY_ID
           aws_secret_access_key: $AWS_SECRET_ACCESS_KEY

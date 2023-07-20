@@ -15,7 +15,7 @@ MarkupSafe==1.1.1
 myst-parser==0.9.1
 packaging==20.3
 Pillow==7.0.0
-Pygments==2.5.2
+Pygments==2.15.0
 pyparsing==2.4.6
 python-slugify==4.0.1
 pytz==2019.3

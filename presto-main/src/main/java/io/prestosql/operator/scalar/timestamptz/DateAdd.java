@@ -14,6 +14,7 @@
 package io.prestosql.operator.scalar.timestamptz;
 
 import io.airlift.slice.Slice;
+import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.function.Description;
 import io.prestosql.spi.function.LiteralParameter;
 import io.prestosql.spi.function.LiteralParameters;
@@ -23,6 +24,7 @@ import io.prestosql.spi.type.LongTimestampWithTimeZone;
 import io.prestosql.spi.type.StandardTypes;
 
 import static io.prestosql.operator.scalar.DateTimeFunctions.getTimestampField;
+import static io.prestosql.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static io.prestosql.spi.type.DateTimeEncoding.unpackMillisUtc;
 import static io.prestosql.spi.type.DateTimeEncoding.updateMillisUtc;
 import static io.prestosql.type.DateTimes.round;
@@ -43,12 +45,17 @@ public class DateAdd
             @SqlType(StandardTypes.BIGINT) long value,
             @SqlType("timestamp(p) with time zone") long packedEpochMillis)
     {
-        long epochMillis = unpackMillisUtc(packedEpochMillis);
+        try {
+            long epochMillis = unpackMillisUtc(packedEpochMillis);
 
-        epochMillis = getTimestampField(unpackChronology(packedEpochMillis), unit).add(epochMillis, toIntExact(value));
-        epochMillis = round(epochMillis, (int) (3 - precision));
+            epochMillis = getTimestampField(unpackChronology(packedEpochMillis), unit).add(epochMillis, toIntExact(value));
+            epochMillis = round(epochMillis, (int) (3 - precision));
 
-        return updateMillisUtc(epochMillis, packedEpochMillis);
+            return updateMillisUtc(epochMillis, packedEpochMillis);
+        }
+        catch (IllegalArgumentException | ArithmeticException e) {
+            throw new PrestoException(INVALID_FUNCTION_ARGUMENT, e.getMessage());
+        }
     }
 
     @LiteralParameters({"x", "p"})
@@ -58,8 +65,13 @@ public class DateAdd
             @SqlType(StandardTypes.BIGINT) long value,
             @SqlType("timestamp(p) with time zone") LongTimestampWithTimeZone timestamp)
     {
-        long epochMillis = getTimestampField(unpackChronology(timestamp.getTimeZoneKey()), unit).add(timestamp.getEpochMillis(), toIntExact(value));
+        try {
+            long epochMillis = getTimestampField(unpackChronology(timestamp.getTimeZoneKey()), unit).add(timestamp.getEpochMillis(), toIntExact(value));
 
-        return LongTimestampWithTimeZone.fromEpochMillisAndFraction(epochMillis, timestamp.getPicosOfMilli(), timestamp.getTimeZoneKey());
+            return LongTimestampWithTimeZone.fromEpochMillisAndFraction(epochMillis, timestamp.getPicosOfMilli(), timestamp.getTimeZoneKey());
+        }
+        catch (IllegalArgumentException | ArithmeticException e) {
+            throw new PrestoException(INVALID_FUNCTION_ARGUMENT, e.getMessage());
+        }
     }
 }

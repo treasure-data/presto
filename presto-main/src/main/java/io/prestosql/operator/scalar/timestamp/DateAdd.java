@@ -15,6 +15,7 @@ package io.prestosql.operator.scalar.timestamp;
 
 import io.airlift.slice.Slice;
 import io.prestosql.operator.scalar.DateTimeFunctions;
+import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.function.Description;
 import io.prestosql.spi.function.LiteralParameter;
 import io.prestosql.spi.function.LiteralParameters;
@@ -24,6 +25,7 @@ import io.prestosql.spi.type.LongTimestamp;
 import io.prestosql.spi.type.StandardTypes;
 import org.joda.time.chrono.ISOChronology;
 
+import static io.prestosql.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static io.prestosql.type.DateTimes.getMicrosOfMilli;
 import static io.prestosql.type.DateTimes.round;
 import static io.prestosql.type.DateTimes.scaleEpochMicrosToMillis;
@@ -44,16 +46,21 @@ public class DateAdd
             @SqlType(StandardTypes.BIGINT) long value,
             @SqlType("timestamp(p)") long timestamp)
     {
-        long epochMillis = scaleEpochMicrosToMillis(timestamp);
-        int microsOfMilli = getMicrosOfMilli(timestamp);
+        try {
+            long epochMillis = scaleEpochMicrosToMillis(timestamp);
+            int microsOfMilli = getMicrosOfMilli(timestamp);
 
-        epochMillis = DateTimeFunctions.getTimestampField(ISOChronology.getInstanceUTC(), unit).add(epochMillis, toIntExact(value));
+            epochMillis = DateTimeFunctions.getTimestampField(ISOChronology.getInstanceUTC(), unit).add(epochMillis, toIntExact(value));
 
-        if (precision <= 3) {
-            epochMillis = round(epochMillis, (int) (3 - precision));
+            if (precision <= 3) {
+                epochMillis = round(epochMillis, (int) (3 - precision));
+            }
+
+            return scaleEpochMillisToMicros(epochMillis) + microsOfMilli;
         }
-
-        return scaleEpochMillisToMicros(epochMillis) + microsOfMilli;
+        catch (IllegalArgumentException | ArithmeticException e) {
+            throw new PrestoException(INVALID_FUNCTION_ARGUMENT, e.getMessage());
+        }
     }
 
     @LiteralParameters({"x", "p"})

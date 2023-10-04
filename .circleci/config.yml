@@ -45,6 +45,7 @@ jobs:
       - run:
           name: Build presto
           command: |
+            git config --global --add safe.directory /home/presto/presto
             # Exclude unnecessary modules from pom.xml
             rake update-pom-modules
             # Assign a unique version number to the modules

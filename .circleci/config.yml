@@ -1,0 +1,79 @@
+---
+version: 2
+aliases:
+  - &install_jdk
+    name: Install JDK
+    command: |
+      mkdir -p "${JAVA_HOME}"
+      curl -L -C - https://corretto.aws/downloads/resources/17.0.8.8.1/amazon-corretto-17.0.8.8.1-linux-x64.tar.gz | tar zxvf - -C "${JAVA_HOME}" --strip-components 1
+      [[ -e "${JAVA_HOME}/bin/java" ]]
+
+jobs:
+  build_and_deploy:
+    working_directory: /home/trino/trino
+    environment:
+      - PLAZMA_ENV: circle_test
+      - RUN_SUBTREE_TEST: true
+      - MAVEN_OPTS: -Xmx4g -Xms4g
+      - _JAVA_OPTIONS: -Xmx4g -Xms4g -XX:ReservedCodeCacheSize=300M -XX:InitiatingHeapOccupancyPercent=30
+      - RUBY_VERSION: 3.1.2
+      - MAVEN_USER_HOME: /home/trino/.m2
+      - JAVA_HOME: /home/trino/.java
+    docker:
+      - image: 523683666290.dkr.ecr.us-east-1.amazonaws.com/td-build:latest
+        aws_auth:
+          aws_access_key_id: $AWS_ACCESS_KEY_ID
+          aws_secret_access_key: $AWS_SECRET_ACCESS_KEY
+    resource_class: xlarge
+    steps:
+      - checkout
+      - run:
+          name: Setup non-priviledged user (trino)
+          command: |
+            apt-get update
+            apt-get install -y sudo
+            useradd -m trino
+            chown -R trino /home/trino/trino
+            mkdir /home/trino/.m2
+            chown -R trino /home/trino/.m2
+
+      - restore_cache:
+          key: trino-{{ checksum "pom.xml" }}
+
+      - run: *install_jdk
+
+      - run:
+          name: Build trino
+          command: |
+            git config --global --add safe.directory /home/trino/trino
+            # Exclude unnecessary modules from pom.xml
+            rake update-pom-modules
+            # Assign a unique version number to the modules
+            rake update-pom-version
+            # Exclude unnecessary modules from trino-server provisioning
+            rake update-provisio-modules
+            # Run mvn test-compile here to cache the compile-time dependencies
+            rake compile
+
+      - save_cache:
+          paths:
+            - /home/trino/.m2
+            - /root/.m2
+          key: trino-{{ checksum "pom.xml" }}
+
+      - run:
+          name: deploy
+          command: |
+            rake deploy
+
+workflows:
+  version: 2
+  build_and_integration:
+    jobs:
+      - build_and_deploy:
+          context:
+            - aws-td
+            - jfrog
+          filters:
+            tags:
+              only: /.*/

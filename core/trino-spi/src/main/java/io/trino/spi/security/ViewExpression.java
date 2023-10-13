@@ -19,18 +19,18 @@ import static java.util.Objects.requireNonNull;
 
 public class ViewExpression
 {
-    private final Optional<String> identity;
+    private final Optional<Identity> identity;
     private final Optional<String> catalog;
     private final Optional<String> schema;
     private final String expression;
 
     @Deprecated
-    public ViewExpression(String identity, Optional<String> catalog, Optional<String> schema, String expression)
+    public ViewExpression(Identity identity, Optional<String> catalog, Optional<String> schema, String expression)
     {
         this(Optional.of(identity), catalog, schema, expression);
     }
 
-    public ViewExpression(Optional<String> identity, Optional<String> catalog, Optional<String> schema, String expression)
+    public ViewExpression(Optional<Identity> identity, Optional<String> catalog, Optional<String> schema, String expression)
     {
         this.identity = requireNonNull(identity, "identity is null");
         this.catalog = requireNonNull(catalog, "catalog is null");
@@ -43,7 +43,7 @@ public class ViewExpression
     }
 
     @Deprecated
-    public String getIdentity()
+    public Identity getIdentity()
     {
         return identity.orElseThrow();
     }
@@ -52,7 +52,7 @@ public class ViewExpression
      * @return user as whom the view expression will be evaluated. If empty identity is returned
      * then session user is used.
      */
-    public Optional<String> getSecurityIdentity()
+    public Optional<Identity> getSecurityIdentity()
     {
         return identity;
     }

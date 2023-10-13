@@ -277,12 +277,12 @@ public class TestRowFilter
         accessControl.rowFilter(
                 new QualifiedObjectName(LOCAL_CATALOG, "tiny", "orders"),
                 RUN_AS_USER,
-                new ViewExpression(Optional.of(RUN_AS_USER), Optional.of(LOCAL_CATALOG), Optional.of("tiny"), "orderkey = 1"));
+                new ViewExpression(Identity.ofUser(RUN_AS_USER), Optional.of(LOCAL_CATALOG), Optional.of("tiny"), "orderkey = 1"));
 
         accessControl.rowFilter(
                 new QualifiedObjectName(LOCAL_CATALOG, "tiny", "orders"),
                 USER,
-                new ViewExpression(Optional.of(RUN_AS_USER), Optional.of(LOCAL_CATALOG), Optional.of("tiny"), "orderkey IN (SELECT orderkey FROM orders)"));
+                new ViewExpression(Identity.ofUser(RUN_AS_USER), Optional.of(LOCAL_CATALOG), Optional.of("tiny"), "orderkey IN (SELECT orderkey FROM orders)"));
 
         assertThat(assertions.query("SELECT count(*) FROM orders")).matches("VALUES BIGINT '1'");
     }
@@ -422,7 +422,7 @@ public class TestRowFilter
         accessControl.rowFilter(
                 new QualifiedObjectName(LOCAL_CATALOG, "tiny", "orders"),
                 USER,
-                new ViewExpression(Optional.of(RUN_AS_USER), Optional.of(LOCAL_CATALOG), Optional.of("tiny"), "orderkey = 0"));
+                new ViewExpression(Identity.ofUser(RUN_AS_USER), Optional.of(LOCAL_CATALOG), Optional.of("tiny"), "orderkey = 0"));
 
         assertThat(assertions.query("SHOW STATS FOR (SELECT * FROM tiny.orders)"))
                 .containsAll(

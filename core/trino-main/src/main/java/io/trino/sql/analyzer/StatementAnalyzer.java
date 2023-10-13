@@ -4709,11 +4709,7 @@ class StatementAnalyzer
 
             ExpressionAnalysis expressionAnalysis;
             try {
-                Identity filterIdentity = filter.getSecurityIdentity()
-                        .map(filterUser -> Identity.forUser(filterUser)
-                                .withGroups(groupProvider.getGroups(filterUser))
-                                .build())
-                        .orElseGet(session::getIdentity);
+                Identity filterIdentity = filter.getSecurityIdentity().orElseGet(session::getIdentity);
                 expressionAnalysis = ExpressionAnalyzer.analyzeExpression(
                         createViewSession(filter.getCatalog(), filter.getSchema(), filterIdentity, session.getPath()), // TODO: path should be included in row filter
                         plannerContext,
@@ -4762,11 +4758,7 @@ class StatementAnalyzer
 
             ExpressionAnalysis expressionAnalysis;
             try {
-                Identity constraintIdentity = constraint.getSecurityIdentity()
-                        .map(user -> Identity.forUser(user)
-                            .withGroups(groupProvider.getGroups(user))
-                            .build())
-                        .orElseGet(session::getIdentity);
+                Identity constraintIdentity = constraint.getSecurityIdentity().orElseGet(session::getIdentity);
                 expressionAnalysis = ExpressionAnalyzer.analyzeExpression(
                         createViewSession(constraint.getCatalog(), constraint.getSchema(), constraintIdentity, session.getPath()),
                         plannerContext,
@@ -4827,11 +4819,7 @@ class StatementAnalyzer
             verifyNoAggregateWindowOrGroupingFunctions(session, metadata, expression, format("Column mask for '%s.%s'", table.getName(), column));
 
             try {
-                Identity maskIdentity = mask.getSecurityIdentity()
-                        .map(maskUser -> Identity.forUser(maskUser)
-                                .withGroups(groupProvider.getGroups(maskUser))
-                                .build())
-                        .orElseGet(session::getIdentity);
+                Identity maskIdentity = mask.getSecurityIdentity().orElseGet(session::getIdentity);
                 expressionAnalysis = ExpressionAnalyzer.analyzeExpression(
                         createViewSession(mask.getCatalog(), mask.getSchema(), maskIdentity, session.getPath()), // TODO: path should be included in row filter
                         plannerContext,

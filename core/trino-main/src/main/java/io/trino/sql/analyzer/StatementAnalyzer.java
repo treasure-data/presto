@@ -546,7 +546,7 @@ class StatementAnalyzer
             }
 
             // analyze the query that creates the data
-            Scope queryScope = analyze(insert.getQuery());
+            Scope queryScope = analyze(insert.getQuery(), Optional.empty(), false);
 
             // verify the insert destination columns match the query
             RedirectionAwareTableHandle redirection = metadata.getRedirectionAwareTableHandle(session, targetTable);
@@ -928,7 +928,7 @@ class StatementAnalyzer
             accessControl.checkCanCreateTable(session.toSecurityContext(), targetTable, explicitlySetProperties);
 
             // analyze the query that creates the table
-            Scope queryScope = analyze(node.getQuery());
+            Scope queryScope = analyze(node.getQuery(), Optional.empty(), false);
 
             ImmutableList.Builder<ColumnMetadata> columns = ImmutableList.builder();
 

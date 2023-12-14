@@ -19,6 +19,7 @@ import io.trino.operator.PagesIndex;
 import io.trino.operator.PagesIndexComparator;
 import io.trino.operator.WindowOperator.FrameBoundKey;
 import io.trino.spi.PageBuilder;
+import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.function.WindowFunction;
 import io.trino.spi.function.WindowIndex;
 
@@ -175,6 +176,40 @@ public final class RegularWindowPartition
                     range.getEnd());
             channel++;
         }
+
+        currentPosition++;
+    }
+
+    public void copyOutputs(PageBuilder pageBuilder, int[] positions)
+    {
+        // copy output channels
+        int channel = 0;
+        while (channel < outputChannels.length) {
+            for (int position : positions) {
+                pagesIndex.appendTo(outputChannels[channel], partitionStart + position, pageBuilder.getBlockBuilder(channel));
+            }
+            channel++;
+        }
+    }
+
+    public void processFixedSizeWindowNextRow(WindowFunction function, BlockBuilder blockBuilder)
+    {
+        checkState(hasNext(), "No more rows in partition");
+
+        // DO NOT COPY OUTPUT CHANNEL
+        // check for new peer group
+        if (currentPosition == peerGroupEnd) {
+            updatePeerGroup();
+        }
+
+        // Only single FixedSizeWindowFunction is allowed
+        Framing.Range range = framings.get(0).getRange(currentPosition, currentGroupIndex, peerGroupStart, peerGroupEnd);
+        function.processRow(
+                blockBuilder,
+                peerGroupStart - partitionStart,
+                peerGroupEnd - partitionStart - 1,
+                range.getStart(),
+                range.getEnd());
 
         currentPosition++;
     }

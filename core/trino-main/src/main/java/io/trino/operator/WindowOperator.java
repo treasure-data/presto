@@ -25,13 +25,17 @@ import io.trino.operator.WorkProcessor.ProcessState;
 import io.trino.operator.WorkProcessor.Transformation;
 import io.trino.operator.WorkProcessor.TransformationState;
 import io.trino.operator.window.FrameInfo;
+import io.trino.operator.window.MappedWindowFunction;
 import io.trino.operator.window.Partitioner;
 import io.trino.operator.window.PartitionerSupplier;
 import io.trino.operator.window.PatternRecognitionPartitioner;
+import io.trino.operator.window.RegularWindowPartition;
 import io.trino.operator.window.WindowPartition;
 import io.trino.spi.Page;
 import io.trino.spi.PageBuilder;
+import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.connector.SortOrder;
+import io.trino.spi.function.FixedSizeWindowFunction;
 import io.trino.spi.function.WindowFunction;
 import io.trino.spi.type.Type;
 import io.trino.spiller.Spiller;
@@ -315,6 +319,16 @@ public class WindowOperator
                 sortChannels,
                 windowFunctionDefinitions);
 
+        Optional<WindowFunction> fixedSizeWindowFunction = Optional.empty();
+        for (WindowFunction windowFunction : windowFunctions) {
+            if (windowFunction instanceof MappedWindowFunction mappedWindowFunction) {
+                WindowFunction func = mappedWindowFunction.getFunction();
+                if (func instanceof FixedSizeWindowFunction) {
+                    checkArgument(windowFunctions.size() == 1, "only single FixedSizeWindowFunction allowed");
+                    fixedSizeWindowFunction = Optional.of(func);
+                }
+            }
+        }
         if (spillEnabled) {
             PagesIndexWithHashStrategies mergedPagesIndexWithHashStrategies = new PagesIndexWithHashStrategies(
                     pagesIndexFactory,
@@ -341,6 +355,13 @@ public class WindowOperator
                     .flatTransform(spillablePagesToPagesIndexes.get())
                     .flatMap(this::pagesIndexToWindowPartitions)
                     .transform(new WindowPartitionsToOutputPages());
+        }
+        else if (fixedSizeWindowFunction.isPresent()) {
+            this.spillablePagesToPagesIndexes = Optional.empty();
+            this.outputPages = pageBuffer.pages()
+                    .transform(new PagesToPagesIndexes(inMemoryPagesIndexWithHashStrategies, orderChannels, ordering))
+                    .flatMap(this::pagesIndexToWindowPartitions)
+                    .transform(new FixedSizeWindowPartitionsToOutputPages(fixedSizeWindowFunction.get()));
         }
         else {
             this.spillablePagesToPagesIndexes = Optional.empty();
@@ -651,6 +672,72 @@ public class WindowOperator
             Page page = pageBuilder.build();
             pageBuilder.reset();
             return TransformationState.ofResult(page, !partition.hasNext());
+        }
+    }
+
+    private class FixedSizeWindowPartitionsToOutputPages
+            implements Transformation<WindowPartition, Page>
+    {
+        BlockBuilder windowBlockBuilder;
+        final PageBuilder pageBuilder;
+        final WindowFunction windowFunction;
+        final FixedSizeWindowFunction function;
+        final Type outputType;
+
+        FixedSizeWindowPartitionsToOutputPages(WindowFunction windowFunction)
+        {
+            outputType = outputTypes.get(outputTypes.size() - 1);
+            windowBlockBuilder = outputType.createBlockBuilder(null, 1024);
+            pageBuilder = new PageBuilder(outputTypes);
+            this.windowFunction = windowFunction;
+            this.function = ((FixedSizeWindowFunction) windowFunction);
+        }
+
+        @Override
+        public TransformationState<Page> process(WindowPartition partition)
+        {
+            boolean finishing = partition == null;
+            if (finishing) {
+                if (windowBlockBuilder.getPositionCount() == 0) {
+                    if (pageBuilder.isEmpty()) {
+                        return TransformationState.finished();
+                    }
+                }
+                else {
+                    int[] positions = function.selectPositions(windowBlockBuilder.getPositionCount());
+                    copyPositions(partition, positions);
+                }
+
+                // Output the remaining page if we have anything buffered
+                Page page = pageBuilder.build();
+                pageBuilder.reset();
+                return TransformationState.ofResult(page, false);
+            }
+
+            // process whole partition without output channels for unwanted copy and memory usage
+            while (partition.hasNext()) {
+                ((RegularWindowPartition) partition).processFixedSizeWindowNextRow(windowFunction, windowBlockBuilder);
+            }
+            int[] positions = function.selectPositions(windowBlockBuilder.getPositionCount());
+            copyPositions(partition, positions);
+
+            if (!pageBuilder.isFull()) {
+                return needsMoreData();
+            }
+
+            Page page = pageBuilder.build();
+            pageBuilder.reset();
+            return TransformationState.ofResult(page, !partition.hasNext());
+        }
+
+        private void copyPositions(WindowPartition partition, int[] positions)
+        {
+            ((RegularWindowPartition) partition).copyOutputs(pageBuilder, positions);
+            for (int position : positions) {
+                outputType.appendTo(windowBlockBuilder, position, pageBuilder.getBlockBuilder(outputChannels.length));
+            }
+            pageBuilder.declarePositions(positions.length);
+            windowBlockBuilder = windowBlockBuilder.newBlockBuilderLike(null);
         }
     }
 

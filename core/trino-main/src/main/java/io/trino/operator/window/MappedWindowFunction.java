@@ -45,4 +45,9 @@ public final class MappedWindowFunction
     {
         function.processRow(output, peerGroupStart, peerGroupEnd, frameStart, frameEnd);
     }
+
+    public WindowFunction getFunction()
+    {
+        return function;
+    }
 }

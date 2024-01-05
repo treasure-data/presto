@@ -1093,6 +1093,10 @@ public final class DomainTranslator
                     session,
                     new AllowAllAccessControl(),
                     ImmutableMap.of());
+            if (matcher == null) {
+                // LIKE on null evaluated
+                return Optional.empty();
+            }
 
             Slice pattern = utf8Slice(matcher.getPattern());
             Optional<Slice> escape = matcher.getEscape()

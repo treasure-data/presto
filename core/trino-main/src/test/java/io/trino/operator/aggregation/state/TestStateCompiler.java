@@ -31,6 +31,7 @@ import io.trino.spi.function.AccumulatorState;
 import io.trino.spi.function.AccumulatorStateFactory;
 import io.trino.spi.function.AccumulatorStateSerializer;
 import io.trino.spi.function.GroupedAccumulatorState;
+import io.trino.spi.function.InOut;
 import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.RowType;
 import io.trino.spi.type.Type;
@@ -238,6 +239,43 @@ public class TestStateCompiler
         assertEquals(deserializedState.getAnotherBlock().getSlice(1, 0, 9), singleState.getAnotherBlock().getSlice(1, 0, 9));
     }
 
+    @Test
+    public void testEstimatedInOutStatesInstanceSizes()
+    {
+        AccumulatorStateFactory<InOut> factory = StateCompiler.generateInOutStateFactory(BIGINT);
+        InOut groupedState = factory.createGroupedState();
+        InOut singleState = factory.createSingleState();
+
+        long expectedGroupedSize =
+                instanceSize(groupedState.getClass()) +
+                new LongBigArray().sizeOf() + // values, 1024 longs
+                new BooleanBigArray().sizeOf(); // isNull, 1024 booleans
+
+        assertEquals(groupedState.getEstimatedSize(), expectedGroupedSize);
+        assertEquals(groupedState.getEstimatedSize(), 17576);
+
+        assertEquals(singleState.getEstimatedSize(), instanceSize(singleState.getClass()));
+        assertEquals(singleState.getEstimatedSize(), 24);
+    }
+
+    @Test
+    public void testEstimatedStateInstanceSizes()
+    {
+        AccumulatorStateFactory<TestSimpleState> stateFactory = StateCompiler.generateStateFactory(TestSimpleState.class);
+        TestSimpleState groupedState = stateFactory.createGroupedState();
+        TestSimpleState singleState = stateFactory.createSingleState();
+
+        long expectedGroupedSize = instanceSize(groupedState.getClass()) +
+                new LongBigArray().sizeOf() +
+                new DoubleBigArray().sizeOf();
+
+        assertEquals(groupedState.getEstimatedSize(), expectedGroupedSize);
+        assertEquals(groupedState.getEstimatedSize(), 24752);
+
+        assertEquals(singleState.getEstimatedSize(), instanceSize(singleState.getClass()));
+        assertEquals(singleState.getEstimatedSize(), 32);
+    }
+
     private static long getComplexStateRetainedSize(TestComplexState state)
     {
         long retainedSize = instanceSize(state.getClass());
@@ -357,6 +395,18 @@ public class TestStateCompiler
             groupedState.setAnotherBlock(map);
             assertEquals(groupedState.getEstimatedSize(), initialRetainedSize + retainedSize * 1000 + getReferenceCountMapOverhead(groupedState));
         }
+    }
+
+    public interface TestSimpleState
+            extends AccumulatorState
+    {
+        long getLong();
+
+        void setLong(long value);
+
+        double getDouble();
+
+        void setDouble(double value);
     }
 
     public interface TestComplexState

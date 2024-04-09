@@ -524,11 +524,13 @@ public class SqlTaskManager
                     Set<CatalogHandle> catalogHandles = activeCatalogs.stream()
                             .map(CatalogProperties::getCatalogHandle)
                             .collect(toImmutableSet());
-                    if (sqlTask.setCatalogs(catalogHandles)) {
+                    sqlTask.setCatalogs(catalogHandles);
+                    if (!sqlTask.catalogsLoaded()) {
                         ReentrantReadWriteLock.ReadLock catalogInitLock = catalogsLock.readLock();
                         catalogInitLock.lock();
                         try {
                             connectorServicesProvider.ensureCatalogsLoaded(session, activeCatalogs);
+                            sqlTask.setCatalogsLoaded();
                         }
                         finally {
                             catalogInitLock.unlock();

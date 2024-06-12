@@ -216,7 +216,7 @@ public class ExpressionAnalyzer
     private final boolean isDescribe;
 
     private final Map<NodeRef<FunctionCall>, ResolvedFunction> resolvedFunctions = new LinkedHashMap<>();
-    private final Set<NodeRef<SubqueryExpression>> scalarSubqueries = new LinkedHashSet<>();
+    private final Set<NodeRef<SubqueryExpression>> subqueries = new LinkedHashSet<>();
     private final Set<NodeRef<ExistsPredicate>> existsSubqueries = new LinkedHashSet<>();
     private final Map<NodeRef<Expression>, Type> expressionCoercions = new LinkedHashMap<>();
     private final Set<NodeRef<Expression>> typeOnlyCoercions = new LinkedHashSet<>();
@@ -353,9 +353,9 @@ public class ExpressionAnalyzer
         return visitor.process(expression, new StackableAstVisitor.StackableAstVisitorContext<>(context));
     }
 
-    public Set<NodeRef<SubqueryExpression>> getScalarSubqueries()
+    public Set<NodeRef<SubqueryExpression>> getSubqueries()
     {
-        return unmodifiableSet(scalarSubqueries);
+        return unmodifiableSet(subqueries);
     }
 
     public Set<NodeRef<ExistsPredicate>> getExistsSubqueries()
@@ -1511,7 +1511,7 @@ public class ExpressionAnalyzer
                 quantifiedComparisons.add(NodeRef.of((QuantifiedComparisonExpression) previousNode));
             }
             else {
-                scalarSubqueries.add(NodeRef.of(node));
+                subqueries.add(NodeRef.of(node));
             }
 
             Type type = getOnlyElement(queryScope.getRelationType().getVisibleFields()).getType();
@@ -1892,7 +1892,7 @@ public class ExpressionAnalyzer
                 analyzer.getExpressionTypes(),
                 analyzer.getExpressionCoercions(),
                 analyzer.getSubqueryInPredicates(),
-                analyzer.getScalarSubqueries(),
+                analyzer.getSubqueries(),
                 analyzer.getExistsSubqueries(),
                 analyzer.getColumnReferences(),
                 analyzer.getTypeOnlyCoercions(),
@@ -1939,7 +1939,7 @@ public class ExpressionAnalyzer
                 expressionTypes,
                 expressionCoercions,
                 analyzer.getSubqueryInPredicates(),
-                analyzer.getScalarSubqueries(),
+                analyzer.getSubqueries(),
                 analyzer.getExistsSubqueries(),
                 analyzer.getColumnReferences(),
                 analyzer.getTypeOnlyCoercions(),

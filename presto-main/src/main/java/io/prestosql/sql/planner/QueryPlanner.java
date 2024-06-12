@@ -174,7 +174,7 @@ class QueryPlanner
         PlanBuilder builder = planQueryBody(query);
 
         List<Expression> orderBy = analysis.getOrderByExpressions(query);
-        builder = subqueryPlanner.handleSubqueries(builder, orderBy, query);
+        builder = subqueryPlanner.handleSubqueries(builder, orderBy, analysis.getSubqueries(query));
 
         List<SelectExpression> selectExpressions = analysis.getSelectExpressions(query);
         List<Expression> outputs = selectExpressions.stream()
@@ -372,7 +372,7 @@ class QueryPlanner
         List<Expression> expressions = selectExpressions.stream()
                 .map(SelectExpression::getExpression)
                 .collect(toImmutableList());
-        builder = subqueryPlanner.handleSubqueries(builder, expressions, node);
+        builder = subqueryPlanner.handleSubqueries(builder, expressions, analysis.getSubqueries(node));
 
         if (hasExpressionsToUnfold(selectExpressions)) {
             // pre-project the folded expressions to preserve any non-deterministic semantics of functions that might be referenced
@@ -409,7 +409,7 @@ class QueryPlanner
         }
 
         List<Expression> orderBy = analysis.getOrderByExpressions(node);
-        builder = subqueryPlanner.handleSubqueries(builder, orderBy, node);
+        builder = subqueryPlanner.handleSubqueries(builder, orderBy, analysis.getSubqueries(node));
         builder = builder.appendProjections(Iterables.concat(orderBy, outputs), symbolAllocator, idAllocator);
 
         builder = distinct(builder, node, outputs);
@@ -506,7 +506,7 @@ class QueryPlanner
             return subPlan;
         }
 
-        subPlan = subqueryPlanner.handleSubqueries(subPlan, predicate, node);
+        subPlan = subqueryPlanner.handleSubqueries(subPlan, predicate, analysis.getSubqueries(node));
 
         return subPlan.withNewRoot(new FilterNode(idAllocator.getNextId(), subPlan.getRoot(), subPlan.rewrite(predicate)));
     }
@@ -542,7 +542,7 @@ class QueryPlanner
         inputBuilder.addAll(groupingSetAnalysis.getComplexExpressions());
 
         List<Expression> inputs = inputBuilder.build();
-        subPlan = subqueryPlanner.handleSubqueries(subPlan, inputs, node);
+        subPlan = subqueryPlanner.handleSubqueries(subPlan, inputs, analysis.getSubqueries(node));
         subPlan = subPlan.appendProjections(inputs, symbolAllocator, idAllocator);
 
         // Add projection to coerce inputs to their site-specific types.
@@ -837,7 +837,7 @@ class QueryPlanner
 
             List<Expression> inputs = inputsBuilder.build();
 
-            subPlan = subqueryPlanner.handleSubqueries(subPlan, inputs, node);
+            subPlan = subqueryPlanner.handleSubqueries(subPlan, inputs, analysis.getSubqueries(node));
             subPlan = subPlan.appendProjections(inputs, symbolAllocator, idAllocator);
 
             // Add projection to coerce inputs to their site-specific types.

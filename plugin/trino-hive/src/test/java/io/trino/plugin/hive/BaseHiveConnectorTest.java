@@ -343,6 +343,14 @@ public abstract class BaseHiveConnectorTest
     }
 
     @Override
+    public void testUpdateCaseSensitivity()
+    {
+        assertThatThrownBy(super::testUpdateCaseSensitivity)
+                .hasMessage(MODIFYING_NON_TRANSACTIONAL_TABLE_MESSAGE);
+    }
+
+    @Test
+    @Override
     public void testUpdateRowConcurrently()
             throws Exception
     {

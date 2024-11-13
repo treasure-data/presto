@@ -20,7 +20,7 @@ EXCLUDE_MODULES = %w|
  plugin/trino-clickhouse plugin/trino-delta-lake plugin/trino-example-jdbc
  plugin/trino-hudi plugin/trino-ignite
  plugin/trino-mariadb plugin/trino-mysql-event-listener
- plugin/trino-phoenix5 plugin/trino-redshift
+ plugin/trino-phoenix5
  service/trino-verifier service/trino-proxy
  core/trino-server-rpm
  lib/trino-record-decoder

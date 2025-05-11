@@ -26,10 +26,13 @@ import io.trino.spi.block.RunLengthEncodedBlock;
 import io.trino.spi.type.Type;
 import io.trino.sql.gen.JoinCompiler;
 import io.trino.type.BlockTypeOperators;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.ints.IntList;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import jakarta.annotation.Nullable;
 
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -363,10 +366,18 @@ public class MultiChannelGroupByHash
             return false;
         }
 
+        // let old memory GC
+        this.rawHashByHashPosition = new byte[newCapacity];
+        this.groupIdsByHash = Arrays.copyOf(groupIdsByHash, newCapacity);
+        // half old value and the others are -1
+        Arrays.fill(groupIdsByHash, hashCapacity, newCapacity, -1);
+        // a flag whether a position have new value
+        BitSet bitSet = new BitSet(newCapacity);
+        IntList backups = new IntArrayList();
+        int backupStart = 0;
+
         int newMask = newCapacity - 1;
-        byte[] rawHashes = new byte[newCapacity];
-        int[] newGroupIdByHash = new int[newCapacity];
-        Arrays.fill(newGroupIdByHash, -1);
+        byte[] rawHashes = this.rawHashByHashPosition;
 
         for (int i = 0; i < hashCapacity; i++) {
             // seek to the next used slot
@@ -375,23 +386,47 @@ public class MultiChannelGroupByHash
                 continue;
             }
 
+            if (bitSet.get(i)) {
+                // already replaced to new value, later has the real group id
+                groupId = -1;
+                for (int k = backupStart; k < backups.size(); k += 2) {
+                    int pos = backups.getInt(k);
+                    if (pos == i) {
+                        groupId = backups.getInt(k + 1);
+                        break;
+                    }
+                    else if (pos == -1) {
+                        backupStart += 2;
+                    }
+                }
+                checkState(groupId != -1);
+            }
+            else {
+                groupIdsByHash[i] = -1;
+            }
             long rawHash = hashPosition(groupId);
             // find an empty slot for the address
             int pos = getHashPosition(rawHash, newMask);
-            while (newGroupIdByHash[pos] != -1) {
+            while (bitSet.get(pos)) {
                 pos = (pos + 1) & newMask;
+            }
+
+            int oldGroupId = groupIdsByHash[pos];
+            if (oldGroupId != -1) {
+                // having unprocessed old value, handle it later
+                backups.add(pos);
+                backups.add(oldGroupId);
             }
 
             // record the mapping
             rawHashes[pos] = (byte) rawHash;
-            newGroupIdByHash[pos] = groupId;
+            groupIdsByHash[pos] = groupId;
+            bitSet.set(pos);
         }
 
         this.mask = newMask;
         this.hashCapacity = newCapacity;
         this.maxFill = calculateMaxFill(newCapacity);
-        this.rawHashByHashPosition = rawHashes;
-        this.groupIdsByHash = newGroupIdByHash;
 
         preallocatedMemoryInBytes = 0;
         // release temporary memory reservation

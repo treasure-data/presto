@@ -25,8 +25,11 @@ import io.trino.spi.block.RunLengthEncodedBlock;
 import io.trino.spi.type.AbstractLongType;
 import io.trino.spi.type.BigintType;
 import io.trino.spi.type.Type;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.ints.IntList;
 
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -279,34 +282,73 @@ public class BigintGroupByHash
             return false;
         }
 
-        int newMask = newCapacity - 1;
-        long[] newValues = new long[newCapacity];
-        int[] newGroupIds = new int[newCapacity];
-        Arrays.fill(newGroupIds, -1);
+        this.values = Arrays.copyOf(this.values, newCapacity);
+        this.groupIds = Arrays.copyOf(this.groupIds, newCapacity);
+        Arrays.fill(groupIds, hashCapacity, newCapacity, -1);
+        BitSet bitSet = new BitSet(newCapacity);
+        IntList backups = new IntArrayList();
+        int backupStart = 0;
 
-        for (int i = 0; i < values.length; i++) {
+        int newMask = newCapacity - 1;
+        long[] newValues = this.values;
+        int[] newGroupIds = this.groupIds;
+
+        for (int i = 0; i < hashCapacity; i++) {
             int groupId = groupIds[i];
 
             if (groupId != -1) {
                 long value = values[i];
+                if (bitSet.get(i)) {
+                    // already replaced to new value, later has the real group id
+                    groupId = -1;
+                    for (int k = backupStart; k < backups.size(); k += 4) {
+                        int pos = backups.getInt(k);
+                        if (pos == i) {
+                            groupId = backups.getInt(k + 1);
+
+                            value = 0;
+                            value += ((long) backups.getInt(k + 2)) << 16;
+                            value += backups.getInt(k + 3);
+                            backups.set(k, -1);
+                            break;
+                        }
+                        else if (pos == -1) {
+                            backupStart += 4;
+                        }
+                    }
+                    checkState(groupId != -1);
+                }
+                else {
+                    groupIds[i] = -1;
+                    values[i] = 0;
+                }
                 int hashPosition = getHashPosition(value, newMask);
 
                 // find an empty slot for the address
-                while (newGroupIds[hashPosition] != -1) {
+                while (bitSet.get(hashPosition)) {
                     hashPosition = (hashPosition + 1) & newMask;
+                }
+
+                int oldGroupId = groupIds[hashPosition];
+                if (oldGroupId != -1) {
+                    // having unprocessed old value, handle it later
+                    long oldHash = values[hashPosition];
+                    backups.add(hashPosition);
+                    backups.add(oldGroupId);
+                    backups.add((int) (oldHash >> 16));
+                    backups.add((int) oldHash);
                 }
 
                 // record the mapping
                 newValues[hashPosition] = value;
                 newGroupIds[hashPosition] = groupId;
+                bitSet.set(hashPosition);
             }
         }
 
         mask = newMask;
         hashCapacity = newCapacity;
         maxFill = calculateMaxFill(hashCapacity);
-        values = newValues;
-        groupIds = newGroupIds;
 
         this.valuesByGroupId = Arrays.copyOf(valuesByGroupId, maxFill);
 

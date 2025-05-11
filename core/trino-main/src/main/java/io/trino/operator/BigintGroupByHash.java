@@ -27,6 +27,7 @@ import io.trino.spi.type.BigintType;
 import io.trino.spi.type.Type;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.ints.IntList;
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 
 import java.util.Arrays;
 import java.util.BitSet;
@@ -64,8 +65,9 @@ public class BigintGroupByHash
     private int mask;
 
     // the hash table from values to groupIds
-    private long[] values;
-    private int[] groupIds;
+    private final ObjectArrayList<long[]> values;
+    private final ObjectArrayList<int[]> groupIds;
+    private final int initHashCapacity;
 
     // groupId for the null value
     private int nullGroupId = -1;
@@ -90,12 +92,16 @@ public class BigintGroupByHash
         this.outputRawHash = outputRawHash;
 
         hashCapacity = arraySize(expectedSize, FILL_RATIO);
+        initHashCapacity = hashCapacity;
 
         maxFill = calculateMaxFill(hashCapacity);
         mask = hashCapacity - 1;
-        values = new long[hashCapacity];
-        groupIds = new int[hashCapacity];
-        Arrays.fill(groupIds, -1);
+        values = new ObjectArrayList<>(16);
+        values.add(new long[hashCapacity]);
+        groupIds = new ObjectArrayList<>(16);
+        int[] ids = new int[hashCapacity];
+        Arrays.fill(ids, -1);
+        groupIds.add(ids);
 
         valuesByGroupId = new long[maxFill];
 
@@ -108,8 +114,8 @@ public class BigintGroupByHash
     public long getEstimatedSize()
     {
         return INSTANCE_SIZE +
-                sizeOf(groupIds) +
-                sizeOf(values) +
+                sizeOf(groupIds.get(0)) * groupIds.size() + sizeOf(groupIds.elements()) +
+                sizeOf(values.get(0)) * values.size() + sizeOf(values.elements()) +
                 sizeOf(valuesByGroupId) +
                 preallocatedMemoryInBytes;
     }
@@ -192,17 +198,33 @@ public class BigintGroupByHash
 
         // look for an empty slot or a slot containing this key
         while (true) {
-            int groupId = groupIds[hashPosition];
+            int groupId = getGroupIdByHashPosition(hashPosition);
             if (groupId == -1) {
                 return false;
             }
-            if (value == values[hashPosition]) {
+            if (value == groupId) {
                 return true;
             }
 
             // increment position and mask to handle wrap around
             hashPosition = (hashPosition + 1) & mask;
         }
+    }
+
+    private int getGroupIdByHashPosition(int hashPosition)
+    {
+        return groupIds.get(hashPosition / initHashCapacity)[hashPosition % initHashCapacity];
+    }
+
+    private long getValueByHashPosition(int hashPosition)
+    {
+        return values.get(hashPosition / initHashCapacity)[hashPosition % initHashCapacity];
+    }
+
+    private void setGroupIdByHashPosition(int hashPosition, int groupId, long value)
+    {
+        groupIds.get(hashPosition / initHashCapacity)[hashPosition % initHashCapacity] = groupId;
+        values.get(hashPosition / initHashCapacity)[hashPosition % initHashCapacity] = value;
     }
 
     @Override
@@ -234,12 +256,12 @@ public class BigintGroupByHash
 
         // look for an empty slot or a slot containing this key
         while (true) {
-            int groupId = groupIds[hashPosition];
+            int groupId = getGroupIdByHashPosition(hashPosition);
             if (groupId == -1) {
                 break;
             }
 
-            if (value == values[hashPosition]) {
+            if (value == groupId) {
                 return groupId;
             }
 
@@ -255,9 +277,8 @@ public class BigintGroupByHash
         // record group id in hash
         int groupId = nextGroupId++;
 
-        values[hashPosition] = value;
         valuesByGroupId[groupId] = value;
-        groupIds[hashPosition] = groupId;
+        setGroupIdByHashPosition(hashPosition, groupId, value);
 
         // increase capacity, if necessary
         if (needRehash()) {
@@ -282,22 +303,23 @@ public class BigintGroupByHash
             return false;
         }
 
-        this.values = Arrays.copyOf(this.values, newCapacity);
-        this.groupIds = Arrays.copyOf(this.groupIds, newCapacity);
-        Arrays.fill(groupIds, hashCapacity, newCapacity, -1);
+        while (groupIds.size() * initHashCapacity < newCapacity) {
+            int[] ids = new int[initHashCapacity];
+            Arrays.fill(ids, -1);
+            groupIds.add(ids);
+            values.add(new long[initHashCapacity]);
+        }
         BitSet bitSet = new BitSet(newCapacity);
         IntList backups = new IntArrayList();
         int backupStart = 0;
 
         int newMask = newCapacity - 1;
-        long[] newValues = this.values;
-        int[] newGroupIds = this.groupIds;
 
         for (int i = 0; i < hashCapacity; i++) {
-            int groupId = groupIds[i];
+            int groupId = getGroupIdByHashPosition(i);
 
             if (groupId != -1) {
-                long value = values[i];
+                long value = getValueByHashPosition(i);
                 if (bitSet.get(i)) {
                     // already replaced to new value, later has the real group id
                     groupId = -1;
@@ -319,8 +341,7 @@ public class BigintGroupByHash
                     checkState(groupId != -1);
                 }
                 else {
-                    groupIds[i] = -1;
-                    values[i] = 0;
+                    setGroupIdByHashPosition(i, -1, 0);
                 }
                 int hashPosition = getHashPosition(value, newMask);
 
@@ -329,10 +350,10 @@ public class BigintGroupByHash
                     hashPosition = (hashPosition + 1) & newMask;
                 }
 
-                int oldGroupId = groupIds[hashPosition];
+                int oldGroupId = getGroupIdByHashPosition(hashPosition);
                 if (oldGroupId != -1) {
                     // having unprocessed old value, handle it later
-                    long oldHash = values[hashPosition];
+                    long oldHash = getValueByHashPosition(hashPosition);
                     backups.add(hashPosition);
                     backups.add(oldGroupId);
                     backups.add((int) (oldHash >> 16));
@@ -340,8 +361,7 @@ public class BigintGroupByHash
                 }
 
                 // record the mapping
-                newValues[hashPosition] = value;
-                newGroupIds[hashPosition] = groupId;
+                setGroupIdByHashPosition(hashPosition, groupId, value);
                 bitSet.set(hashPosition);
             }
         }

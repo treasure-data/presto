@@ -76,6 +76,7 @@ public class MultiChannelGroupByHash
     private final HashGenerator hashGenerator;
     private final OptionalInt precomputedHashChannel;
     private final boolean processDictionary;
+    private final int initHashCapacity;
     private PageBuilder currentPageBuilder;
 
     private long completedPagesMemorySize;
@@ -85,7 +86,7 @@ public class MultiChannelGroupByHash
     private int mask;
     // Group ids are assigned incrementally. Therefore, since values page size is constant and power of two,
     // the group id is also an address (slice index and position within slice) to group row in channelBuilders.
-    private int[] groupIdsByHash;
+    private final ObjectArrayList<int[]> groupIdsByHash;
     private byte[] rawHashByHashPosition;
 
     private int nextGroupId;
@@ -144,12 +145,15 @@ public class MultiChannelGroupByHash
 
         // reserve memory for the arrays
         hashCapacity = arraySize(expectedSize, FILL_RATIO);
+        initHashCapacity = hashCapacity;
 
         maxFill = calculateMaxFill(hashCapacity);
         mask = hashCapacity - 1;
         rawHashByHashPosition = new byte[hashCapacity];
-        groupIdsByHash = new int[hashCapacity];
-        Arrays.fill(groupIdsByHash, -1);
+        groupIdsByHash = new ObjectArrayList<>(16);
+        int[] hashIds = new int[hashCapacity];
+        Arrays.fill(hashIds, -1);
+        groupIdsByHash.add(hashIds);
 
         // This interface is used for actively reserving memory (push model) for rehash.
         // The caller can also query memory usage on this object (pull model)
@@ -171,7 +175,7 @@ public class MultiChannelGroupByHash
                 (sizeOf(channelBuilders.get(0).elements()) * channelBuilders.size()) +
                 completedPagesMemorySize +
                 currentPageBuilder.getRetainedSizeInBytes() +
-                sizeOf(groupIdsByHash) +
+                sizeOf(groupIdsByHash.get(0)) * groupIdsByHash.size() + sizeOf(groupIdsByHash.elements()) +
                 sizeOf(rawHashByHashPosition) +
                 preallocatedMemoryInBytes +
                 (dictionaryLookBack != null ? dictionaryLookBack.getRetainedSizeInBytes() : 0);
@@ -244,8 +248,9 @@ public class MultiChannelGroupByHash
         int hashPosition = getHashPosition(rawHash, mask);
 
         // look for a slot containing this key
-        while (groupIdsByHash[hashPosition] != -1) {
-            if (positionNotDistinctFromCurrentRow(groupIdsByHash[hashPosition], hashPosition, position, page, (byte) rawHash, hashChannels)) {
+        int value;
+        while ((value = getGroupIdByHashPosition(hashPosition)) != -1) {
+            if (positionNotDistinctFromCurrentRow(value, hashPosition, position, page, (byte) rawHash, hashChannels)) {
                 // found an existing slot for this key
                 return true;
             }
@@ -275,11 +280,9 @@ public class MultiChannelGroupByHash
 
         // look for an empty slot or a slot containing this key
         int groupId = -1;
-        while (groupIdsByHash[hashPosition] != -1) {
-            if (positionNotDistinctFromCurrentRow(groupIdsByHash[hashPosition], hashPosition, position, page, (byte) rawHash, channels)) {
+        while ((groupId = getGroupIdByHashPosition(hashPosition)) != -1) {
+            if (positionNotDistinctFromCurrentRow(groupId, hashPosition, position, page, (byte) rawHash, channels)) {
                 // found an existing slot for this key
-                groupId = groupIdsByHash[hashPosition];
-
                 break;
             }
             // increment position and mask to handle wrap around
@@ -315,7 +318,7 @@ public class MultiChannelGroupByHash
         int groupId = nextGroupId++;
 
         rawHashByHashPosition[hashPosition] = (byte) rawHash;
-        groupIdsByHash[hashPosition] = groupId;
+        setGroupIdByHashPosition(hashPosition, groupId);
 
         // create new page builder if this page is full
         if (currentPageBuilder.getPositionCount() == VALUES_PAGE_MAX_ROW_COUNT) {
@@ -349,6 +352,16 @@ public class MultiChannelGroupByHash
         }
     }
 
+    private int getGroupIdByHashPosition(int hashPosition)
+    {
+        return groupIdsByHash.get(hashPosition / initHashCapacity)[hashPosition % initHashCapacity];
+    }
+
+    private void setGroupIdByHashPosition(int hashPosition, int value)
+    {
+        groupIdsByHash.get(hashPosition / initHashCapacity)[hashPosition % initHashCapacity] = value;
+    }
+
     private boolean tryRehash()
     {
         long newCapacityLong = hashCapacity * 2L;
@@ -368,9 +381,12 @@ public class MultiChannelGroupByHash
 
         // let old memory GC
         this.rawHashByHashPosition = new byte[newCapacity];
-        this.groupIdsByHash = Arrays.copyOf(groupIdsByHash, newCapacity);
+        while (groupIdsByHash.size() * initHashCapacity < newCapacity) {
+            int[] groupIds = new int[initHashCapacity];
+            Arrays.fill(groupIds, -1);
+            groupIdsByHash.add(groupIds);
+        }
         // half old value and the others are -1
-        Arrays.fill(groupIdsByHash, hashCapacity, newCapacity, -1);
         // a flag whether a position have new value
         BitSet bitSet = new BitSet(newCapacity);
         IntList backups = new IntArrayList();
@@ -381,7 +397,7 @@ public class MultiChannelGroupByHash
 
         for (int i = 0; i < hashCapacity; i++) {
             // seek to the next used slot
-            int groupId = groupIdsByHash[i];
+            int groupId = getGroupIdByHashPosition(i);
             if (groupId == -1) {
                 continue;
             }
@@ -402,7 +418,7 @@ public class MultiChannelGroupByHash
                 checkState(groupId != -1);
             }
             else {
-                groupIdsByHash[i] = -1;
+                setGroupIdByHashPosition(i, -1);
             }
             long rawHash = hashPosition(groupId);
             // find an empty slot for the address
@@ -411,7 +427,7 @@ public class MultiChannelGroupByHash
                 pos = (pos + 1) & newMask;
             }
 
-            int oldGroupId = groupIdsByHash[pos];
+            int oldGroupId = getGroupIdByHashPosition(pos);
             if (oldGroupId != -1) {
                 // having unprocessed old value, handle it later
                 backups.add(pos);
@@ -420,7 +436,7 @@ public class MultiChannelGroupByHash
 
             // record the mapping
             rawHashes[pos] = (byte) rawHash;
-            groupIdsByHash[pos] = groupId;
+            setGroupIdByHashPosition(pos, groupId);
             bitSet.set(pos);
         }
 

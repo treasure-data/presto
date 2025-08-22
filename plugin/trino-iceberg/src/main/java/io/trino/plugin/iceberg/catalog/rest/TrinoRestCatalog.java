@@ -398,19 +398,6 @@ public class TrinoRestCatalog
     }
 
     @Override
-    public Transaction newCreateTableTransaction(
-            ConnectorSession session,
-            SchemaTableName schemaTableName,
-            Schema schema,
-            PartitionSpec partitionSpec,
-            SortOrder sortOrder,
-            String location,
-            Map<String, String> properties)
-    {
-        return newCreateTableTransactionInternal(session, schemaTableName, schema, partitionSpec, sortOrder, Optional.of(location), properties);
-    }
-
-    //@Override
     public Transaction newCreateTableTransactionInternal(
             ConnectorSession session,
             SchemaTableName schemaTableName,

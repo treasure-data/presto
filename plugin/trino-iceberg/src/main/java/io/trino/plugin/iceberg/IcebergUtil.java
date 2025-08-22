@@ -679,7 +679,7 @@ public final class IcebergUtil
             propertiesBuilder.put(TABLE_COMMENT, tableMetadata.getComment().get());
         }
 
-        return catalog.newCreateTableTransaction(session, schemaTableName, schema, partitionSpec, sortOrder, targetPath, propertiesBuilder.buildOrThrow());
+        return catalog.newCreateTableTransaction(session, schemaTableName, schema, partitionSpec, sortOrder, Optional.ofNullable(tableLocation), createTableProperties(tableMetadata, allowedExtraProperties));
     }
 
     /**

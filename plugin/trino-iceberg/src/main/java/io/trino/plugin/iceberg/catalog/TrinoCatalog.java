@@ -92,7 +92,7 @@ public interface TrinoCatalog
             Schema schema,
             PartitionSpec partitionSpec,
             SortOrder sortOrder,
-            String location,
+            Optional<String> location,
             Map<String, String> properties);
 
     void registerTable(ConnectorSession session, SchemaTableName tableName, TableMetadata tableMetadata);
@@ -128,6 +128,7 @@ public interface TrinoCatalog
 
     void updateMaterializedViewColumnComment(ConnectorSession session, SchemaTableName schemaViewName, String columnName, Optional<String> comment);
 
+    @Nullable
     String defaultTableLocation(ConnectorSession session, SchemaTableName schemaTableName);
 
     void setTablePrincipal(ConnectorSession session, SchemaTableName schemaTableName, TrinoPrincipal principal);

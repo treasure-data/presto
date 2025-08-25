@@ -183,6 +183,7 @@
         <dep.flyway.version>9.21.0</dep.flyway.version>
         <dep.parquet.version>1.15.2</dep.parquet.version>
         <dep.jmh.version>1.37</dep.jmh.version>
+        <extraJavaVectorArgs>--add-modules=jdk.incubator.vector</extraJavaVectorArgs>
 
         <dep.docker.images.version>81</dep.docker.images.version>
 
@@ -618,7 +619,7 @@
             <dependency>
                 <groupId>io.airlift</groupId>
                 <artifactId>units</artifactId>
-                <version>1.9</version>
+                <version>1.10</version>
             </dependency>
 
             <dependency>

@@ -11,8 +11,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package io.trino.plugin.iceberg.catalog.rest;
+package io.trino.metastore;
 
+import io.trino.spi.connector.RelationType;
 import io.trino.spi.connector.SchemaTableName;
 
 import static java.util.Objects.requireNonNull;
@@ -21,13 +22,6 @@ public record TableInfo(SchemaTableName tableName, ExtendedRelationType extended
 {
     public static final String PRESTO_VIEW_COMMENT = "Presto View";
     public static final String ICEBERG_MATERIALIZED_VIEW_COMMENT = "Presto Materialized View";
-
-    public enum RelationType
-    {
-        TABLE,
-        VIEW,
-        MATERIALIZED_VIEW,
-    }
 
     public TableInfo
     {

@@ -22,9 +22,7 @@ import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.RowType;
 import io.trino.spi.type.Type;
 import io.trino.type.TypeDeserializer;
-import org.testng.annotations.Test;
-
-import java.util.Optional;
+import org.junit.jupiter.api.Test;
 
 import static io.trino.plugin.iceberg.ColumnIdentity.TypeCategory.ARRAY;
 import static io.trino.plugin.iceberg.ColumnIdentity.TypeCategory.PRIMITIVE;
@@ -32,14 +30,14 @@ import static io.trino.plugin.iceberg.ColumnIdentity.TypeCategory.STRUCT;
 import static io.trino.plugin.iceberg.ColumnIdentity.primitiveColumnIdentity;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.type.InternalTypeManager.TESTING_TYPE_MANAGER;
-import static org.testng.Assert.assertEquals;
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestIcebergColumnHandle
 {
     @Test
     public void testRoundTrip()
     {
-        testRoundTrip(new IcebergColumnHandle(primitiveColumnIdentity(12, "blah"), BIGINT, ImmutableList.of(), BIGINT, Optional.of("this is a comment")));
+        testRoundTrip(IcebergColumnHandle.optional(primitiveColumnIdentity(12, "blah")).columnType(BIGINT).comment("this is a comment").build());
 
         // Nested column
         ColumnIdentity foo1 = new ColumnIdentity(1, "foo1", PRIMITIVE, ImmutableList.of());
@@ -48,28 +46,23 @@ public class TestIcebergColumnHandle
         Type nestedColumnType = RowType.from(ImmutableList.of(
                 RowType.field("foo2", BIGINT),
                 RowType.field("foo3", new ArrayType(BIGINT))));
-        IcebergColumnHandle nestedColumn = new IcebergColumnHandle(
-                new ColumnIdentity(
+        IcebergColumnHandle nestedColumn = IcebergColumnHandle.optional(new ColumnIdentity(
                         5,
                         "foo5",
                         STRUCT,
-                        ImmutableList.of(foo2, foo3)),
-                nestedColumnType,
-                ImmutableList.of(),
-                nestedColumnType,
-                Optional.empty());
+                        ImmutableList.of(foo2, foo3)))
+                .columnType(nestedColumnType)
+                .build();
         testRoundTrip(nestedColumn);
 
-        IcebergColumnHandle partialColumn = new IcebergColumnHandle(
-                new ColumnIdentity(
+        IcebergColumnHandle partialColumn = IcebergColumnHandle.optional(new ColumnIdentity(
                         5,
                         "foo5",
                         STRUCT,
-                        ImmutableList.of(foo2, foo3)),
-                nestedColumnType,
-                ImmutableList.of(2),
-                BIGINT,
-                Optional.empty());
+                        ImmutableList.of(foo2, foo3)))
+                .fieldType(nestedColumnType, BIGINT)
+                .path(2)
+                .build();
         testRoundTrip(partialColumn);
     }
 
@@ -82,14 +75,14 @@ public class TestIcebergColumnHandle
         String json = codec.toJson(expected);
         IcebergColumnHandle actual = codec.fromJson(json);
 
-        assertEquals(actual, expected);
-        assertEquals(actual.getBaseColumnIdentity(), expected.getBaseColumnIdentity());
-        assertEquals(actual.getBaseType(), expected.getBaseType());
-        assertEquals(actual.getQualifiedName(), expected.getQualifiedName());
-        assertEquals(actual.getName(), expected.getName());
-        assertEquals(actual.getColumnIdentity(), expected.getColumnIdentity());
-        assertEquals(actual.getId(), actual.getId());
-        assertEquals(actual.getType(), expected.getType());
-        assertEquals(actual.getComment(), expected.getComment());
+        assertThat(actual).isEqualTo(expected);
+        assertThat(actual.getBaseColumnIdentity()).isEqualTo(expected.getBaseColumnIdentity());
+        assertThat(actual.getBaseType()).isEqualTo(expected.getBaseType());
+        assertThat(actual.getQualifiedName()).isEqualTo(expected.getQualifiedName());
+        assertThat(actual.getName()).isEqualTo(expected.getName());
+        assertThat(actual.getColumnIdentity()).isEqualTo(expected.getColumnIdentity());
+        assertThat(actual.getId()).isEqualTo(expected.getId());
+        assertThat(actual.getType()).isEqualTo(expected.getType());
+        assertThat(actual.getComment()).isEqualTo(expected.getComment());
     }
 }

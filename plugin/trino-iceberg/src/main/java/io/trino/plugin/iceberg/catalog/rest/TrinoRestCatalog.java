@@ -398,7 +398,7 @@ public class TrinoRestCatalog
     }
 
     @Override
-    public Transaction newCreateTableTransactionInternal(
+    public Transaction newCreateTableTransaction(
             ConnectorSession session,
             SchemaTableName schemaTableName,
             Schema schema,

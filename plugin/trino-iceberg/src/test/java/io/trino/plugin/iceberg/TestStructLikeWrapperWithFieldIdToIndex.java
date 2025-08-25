@@ -19,7 +19,7 @@ import org.apache.iceberg.types.Types.NestedField;
 import org.apache.iceberg.types.Types.StringType;
 import org.apache.iceberg.types.Types.StructType;
 import org.apache.iceberg.util.StructLikeWrapper;
-import org.testng.annotations.Test;
+import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -36,8 +36,8 @@ public class TestStructLikeWrapperWithFieldIdToIndex
                 NestedField.optional(1001, "level", IntegerType.get()));
         PartitionData firstPartitionData = PartitionData.fromJson("{\"partitionValues\":[\"ERROR\",\"449245\"]}", new Type[] {StringType.get(), IntegerType.get()});
         PartitionData secondPartitionData = PartitionData.fromJson("{\"partitionValues\":[\"449245\",\"ERROR\"]}", new Type[] {IntegerType.get(), StringType.get()});
-        PartitionTable.StructLikeWrapperWithFieldIdToIndex first = new PartitionTable.StructLikeWrapperWithFieldIdToIndex(StructLikeWrapper.forType(firstStructType).set(firstPartitionData), firstStructType);
-        PartitionTable.StructLikeWrapperWithFieldIdToIndex second = new PartitionTable.StructLikeWrapperWithFieldIdToIndex(StructLikeWrapper.forType(secondStructType).set(secondPartitionData), secondStructType);
+        StructLikeWrapperWithFieldIdToIndex first = new StructLikeWrapperWithFieldIdToIndex(StructLikeWrapper.forType(firstStructType).set(firstPartitionData), firstStructType);
+        StructLikeWrapperWithFieldIdToIndex second = new StructLikeWrapperWithFieldIdToIndex(StructLikeWrapper.forType(secondStructType).set(secondPartitionData), secondStructType);
         assertThat(first).isNotEqualTo(second);
     }
 }

@@ -160,6 +160,10 @@ public abstract class AbstractTestBlock
                     // RowBlockBuilder fieldBlockBuildersList is a simple wrapper around the
                     // array already accounted for in the instance
                 }
+                else if (field.getName().equals("fieldBlocksList")) {
+                    // RowBlockBuilder fieldBlockBuildersList is a simple wrapper around the
+                    // array already accounted for in the instance
+                }
                 else {
                     throw new IllegalArgumentException(format("Unknown type encountered: %s", type));
                 }

@@ -21,6 +21,7 @@ import io.trino.testing.BaseTestParquetWithBloomFilters;
 import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.QueryRunner;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -39,7 +40,7 @@ public class TestIcebergParquetWithBloomFilters
         dataDirectory = queryRunner.getCoordinator().getBaseDataDir().resolve("iceberg_data");
 
         // create hive catalog
-        queryRunner.installPlugin(new TestingHivePlugin());
+        queryRunner.installPlugin(new TestingHivePlugin(Files.createTempDirectory(null)));
         queryRunner.createCatalog("hive", "hive", ImmutableMap.<String, String>builder()
                 .put("hive.metastore", "file")
                 .put("hive.metastore.catalog.dir", dataDirectory.toString())

@@ -55,7 +55,7 @@ public class TestDeltaLakeSharedFileMetastoreWithTableRedirections
         queryRunner.createCatalog("delta_with_redirections", CONNECTOR_NAME, deltaLakeProperties);
         queryRunner.execute("CREATE SCHEMA " + schema);
 
-        queryRunner.installPlugin(new TestingHivePlugin());
+        queryRunner.installPlugin(new TestingHivePlugin(dataDirectory));
 
         queryRunner.createCatalog(
                 "hive_with_redirections",

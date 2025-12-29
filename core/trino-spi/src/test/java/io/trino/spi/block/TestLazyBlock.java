@@ -69,21 +69,21 @@ public class TestLazyBlock
         List<Block> actualNotifications = new ArrayList<>();
         Block arrayBlock = new IntArrayBlock(1, Optional.empty(), new int[] {0});
         LazyBlock lazyArrayBlock = new LazyBlock(1, () -> arrayBlock);
-        Block dictionaryBlock = DictionaryBlock.create(2, lazyArrayBlock, new int[] {0, 0});
-        LazyBlock lazyBlock = new LazyBlock(2, () -> dictionaryBlock);
+        Block rowBlock = RowBlock.fromFieldBlocks(2, new Block[] {lazyArrayBlock});
+        LazyBlock lazyBlock = new LazyBlock(2, () -> rowBlock);
         LazyBlock.listenForLoads(lazyBlock, actualNotifications::add);
 
         Block loadedBlock = lazyBlock.getBlock();
-        assertThat(loadedBlock).isInstanceOf(DictionaryBlock.class);
-        assertThat(((DictionaryBlock) loadedBlock).getDictionary()).isInstanceOf(LazyBlock.class);
+        assertThat(loadedBlock).isInstanceOf(RowBlock.class);
+        assertThat(((RowBlock) loadedBlock).getFieldBlock(0)).isInstanceOf(LazyBlock.class);
         assertEquals(actualNotifications, ImmutableList.of(loadedBlock));
 
         Block fullyLoadedBlock = lazyBlock.getLoadedBlock();
-        assertThat(fullyLoadedBlock).isInstanceOf(DictionaryBlock.class);
-        assertThat(((DictionaryBlock) fullyLoadedBlock).getDictionary()).isInstanceOf(IntArrayBlock.class);
+        assertThat(fullyLoadedBlock).isInstanceOf(RowBlock.class);
+        assertThat(((RowBlock) fullyLoadedBlock).getFieldBlock(0)).isInstanceOf(IntArrayBlock.class);
         assertEquals(actualNotifications, ImmutableList.of(loadedBlock, arrayBlock));
         assertTrue(lazyBlock.isLoaded());
-        assertTrue(dictionaryBlock.isLoaded());
+        assertTrue(rowBlock.isLoaded());
     }
 
     private static void assertNotificationsRecursive(int depth, Block lazyBlock, List<Block> actualNotifications, List<Block> expectedNotifications)

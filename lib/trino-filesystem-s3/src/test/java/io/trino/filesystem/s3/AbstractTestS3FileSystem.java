@@ -36,6 +36,7 @@ import java.io.OutputStream;
 import java.util.List;
 
 import static com.google.common.collect.Iterables.getOnlyElement;
+import static io.trino.filesystem.s3.S3FileSystem.disableStrongIntegrityChecksums;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -74,7 +75,8 @@ public abstract class AbstractTestS3FileSystem
             String key = "foo/bar with whitespace ";
             byte[] contents = "abc foo bar".getBytes(UTF_8);
             s3Client.putObject(
-                    request -> request.bucket(bucket()).key(key),
+                    request -> request.bucket(bucket()).key(key)
+                            .overrideConfiguration(disableStrongIntegrityChecksums()),
                     RequestBody.fromBytes(contents.clone()));
             try {
                 // Verify listing

@@ -14,7 +14,11 @@
 package io.trino.plugin.hive;
 
 import com.google.common.collect.ImmutableMap;
+import io.trino.filesystem.TrinoFileSystemFactory;
+import io.trino.spi.security.ConnectorIdentity;
 import io.trino.testing.QueryRunner;
+
+import static io.trino.plugin.hive.TestingHiveUtils.getConnectorService;
 
 public class TestParquetPageSkippingWithOptimizedReader
         extends AbstractTestParquetPageSkipping
@@ -23,12 +27,15 @@ public class TestParquetPageSkippingWithOptimizedReader
     protected QueryRunner createQueryRunner()
             throws Exception
     {
-        return HiveQueryRunner.builder()
+        QueryRunner queryRunner = HiveQueryRunner.builder()
                 .setHiveProperties(
                         ImmutableMap.of(
                                 "parquet.use-column-index", "true",
                                 "parquet.max-buffer-size", "1MB",
                                 "parquet.optimized-reader.enabled", "true"))
                 .build();
+        fileSystem = getConnectorService(queryRunner, TrinoFileSystemFactory.class)
+                .create(ConnectorIdentity.ofUser("test"));
+        return queryRunner;
     }
 }

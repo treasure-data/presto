@@ -17,10 +17,12 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.trino.filesystem.Location;
 import io.trino.plugin.hive.HiveQueryRunner;
+import io.trino.plugin.hive.metastore.HiveMetastore;
+import io.trino.plugin.hive.metastore.HiveMetastoreFactory;
 import io.trino.plugin.hive.metastore.PrincipalPrivileges;
 import io.trino.plugin.hive.metastore.Table;
-import io.trino.plugin.hive.metastore.file.FileHiveMetastore;
 import io.trino.testing.AbstractTestQueryFramework;
+import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.MaterializedRow;
 import io.trino.testing.QueryRunner;
 import org.testng.annotations.Test;
@@ -34,16 +36,16 @@ import java.util.Optional;
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static io.trino.plugin.hive.HiveQueryRunner.TPCH_SCHEMA;
-import static io.trino.plugin.hive.metastore.file.TestingFileHiveMetastore.createTestingFileHiveMetastore;
+import static io.trino.plugin.hive.TestingHiveUtils.getConnectorService;
 import static java.lang.String.format;
 import static java.nio.file.Files.createTempDirectory;
 import static org.assertj.core.api.Assertions.assertThat;
 
-public abstract class BaseCachingDirectoryListerTest<C extends DirectoryLister>
+public abstract class BaseCachingDirectoryListerTest
         extends AbstractTestQueryFramework
 {
-    private C directoryLister;
-    private FileHiveMetastore fileHiveMetastore;
+    private CachingDirectoryLister directoryLister;
+    private HiveMetastore fileHiveMetastore;
 
     @Override
     protected QueryRunner createQueryRunner()
@@ -57,17 +59,16 @@ public abstract class BaseCachingDirectoryListerTest<C extends DirectoryLister>
     {
         Path temporaryMetastoreDirectory = createTempDirectory(null);
         closeAfterClass(() -> deleteRecursively(temporaryMetastoreDirectory, ALLOW_INSECURE));
-        directoryLister = createDirectoryLister();
-        return HiveQueryRunner.builder()
+        DistributedQueryRunner queryRunner = HiveQueryRunner.builder()
                 .setHiveProperties(properties)
-                .setMetastore(distributedQueryRunner -> fileHiveMetastore = createTestingFileHiveMetastore(temporaryMetastoreDirectory.toFile()))
-                .setDirectoryLister(directoryLister)
                 .build();
+
+        directoryLister = getConnectorService(queryRunner, CachingDirectoryLister.class);
+
+        fileHiveMetastore = getConnectorService(queryRunner, HiveMetastoreFactory.class)
+                .createMetastore(Optional.empty());
+        return queryRunner;
     }
-
-    protected abstract C createDirectoryLister();
-
-    protected abstract boolean isCached(C directoryLister, Location location);
 
     @Test
     public void testCacheInvalidationIsAppliedSpecificallyOnTheNonPartitionedTableBeingChanged()
@@ -367,6 +368,6 @@ public abstract class BaseCachingDirectoryListerTest<C extends DirectoryLister>
 
     protected boolean isCached(String path)
     {
-        return isCached(directoryLister, Location.of(path));
+        return directoryLister.isCached(Location.of(path));
     }
 }

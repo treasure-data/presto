@@ -57,20 +57,21 @@ public class TestDeleteAndInsertMergeProcessor
         //         THEN DELETE
         // expected: ('Dave', 11, 'Darbyshire')
         DeleteAndInsertMergeProcessor processor = makeMergeProcessor();
-        Page inputPage = makePageFromBlocks(
-                2,
-                Optional.empty(),
-                new Block[] {
+        Block[] rowIdBlocks = new Block[] {
                         makeLongArrayBlock(1, 1),               // TransactionId
                         makeLongArrayBlock(1, 0),                // rowId
-                        makeIntArrayBlock(536870912, 536870912)}, // bucket
-                new Block[] {
+                        makeIntArrayBlock(536870912, 536870912)}; // bucket
+        Block[] mergeCaseBlocks = new Block[] {
                         makeVarcharArrayBlock("", "Dave"),      // customer
                         makeIntArrayBlock(0, 11),               // purchases
                         makeVarcharArrayBlock("", "Devon"),     // address
-                        makeByteArrayBlock(1, 1),                // "present" boolean
+                        makeByteArrayBlock(0, 1),                // "present" boolean
                         makeByteArrayBlock(DEFAULT_CASE_OPERATION_NUMBER, DELETE_OPERATION_NUMBER),
-                        makeIntArrayBlock(-1, 0)});
+                        makeIntArrayBlock(0, 0)};
+
+        Page inputPage = new Page(
+                RowBlock.fromNotNullSuppressedFieldBlocks(2, Optional.empty(), rowIdBlocks),
+                RowBlock.fromNotNullSuppressedFieldBlocks(2, Optional.of(new boolean[] {false, false}), mergeCaseBlocks));
 
         Page outputPage = processor.transformPage(inputPage);
         assertThat(outputPage.getPositionCount()).isEqualTo(1);
@@ -79,7 +80,7 @@ public class TestDeleteAndInsertMergeProcessor
         assertThat((int) TINYINT.getByte(outputPage.getBlock(3), 0)).isEqualTo(DELETE_OPERATION_NUMBER);
 
         // Show that the row to be deleted is rowId 0, e.g. ('Dave', 11, 'Devon')
-        Block rowIdRow = outputPage.getBlock(4).getObject(0, Block.class);
+        Block rowIdRow = outputPage.getBlock(5).getObject(0, Block.class);
         assertThat(INTEGER.getInt(rowIdRow, 1)).isEqualTo(0);
     }
 
@@ -104,9 +105,9 @@ public class TestDeleteAndInsertMergeProcessor
                 5,
                 Optional.of(rowIdNulls),
                 new Block[] {
-                        makeLongArrayBlockWithNulls(rowIdNulls, 5, 2, 1, 2, 2),               // TransactionId
-                        makeLongArrayBlockWithNulls(rowIdNulls, 5, 0, 3, 1, 2),                // rowId
-                        makeIntArrayBlockWithNulls(rowIdNulls, 5, 536870912, 536870912, 536870912, 536870912)}, // bucket
+                        makeLongArrayBlockWithNulls(rowIdNulls, 5, 2, 0, 1, 2, 2),               // TransactionId
+                        makeLongArrayBlockWithNulls(rowIdNulls, 5, 0, 0, 3, 1, 2),                // rowId
+                        makeIntArrayBlockWithNulls(rowIdNulls, 5, 536870912, 0, 536870912, 536870912, 536870912)}, // bucket
                 new Block[] {
                         // customer
                         makeVarcharArrayBlock("Aaron", "Carol", "Dave", "Dave", "Ed"),
@@ -122,7 +123,7 @@ public class TestDeleteAndInsertMergeProcessor
 
         Page outputPage = processor.transformPage(inputPage);
         assertThat(outputPage.getPositionCount()).isEqualTo(8);
-        RowBlock rowIdBlock = (RowBlock) outputPage.getBlock(4);
+        RowBlock rowIdBlock = (RowBlock) outputPage.getBlock(5);
         assertThat(rowIdBlock.getPositionCount()).isEqualTo(8);
         // Show that the first row has address "Arches"
         assertThat(getString(outputPage.getBlock(2), 1)).isEqualTo("Arches/Arches");
@@ -144,9 +145,9 @@ Page[positions=8 0:Dict[VarWidth["Aaron", "Dave", "Dave", "Ed", "Aaron", "Carol"
                 5,
                 Optional.of(rowIdNulls),
                 new Block[] {
-                        makeLongArrayBlockWithNulls(rowIdNulls, 5, 2, 1, 2, 2),                // TransactionId
-                        makeLongArrayBlockWithNulls(rowIdNulls, 5, 0, 3, 1, 2),                // rowId
-                        makeIntArrayBlockWithNulls(rowIdNulls, 5, 536870912, 536870912, 536870912, 536870912)}, // bucket
+                        makeLongArrayBlockWithNulls(rowIdNulls, 5, 2, 0, 1, 2, 2),                // TransactionId
+                        makeLongArrayBlockWithNulls(rowIdNulls, 5, 0, 0, 3, 1, 2),                // rowId
+                        makeIntArrayBlockWithNulls(rowIdNulls, 5, 536870912, 0, 536870912, 536870912, 536870912)}, // bucket
                 new Block[] {
                         // customer
                         makeVarcharArrayBlock("Aaron", "Carol", "Dave", "Dave", "Ed"),
@@ -162,7 +163,7 @@ Page[positions=8 0:Dict[VarWidth["Aaron", "Dave", "Dave", "Ed", "Aaron", "Carol"
 
         Page outputPage = processor.transformPage(inputPage);
         assertThat(outputPage.getPositionCount()).isEqualTo(8);
-        RowBlock rowIdBlock = (RowBlock) outputPage.getBlock(4);
+        RowBlock rowIdBlock = (RowBlock) outputPage.getBlock(5);
         assertThat(rowIdBlock.getPositionCount()).isEqualTo(8);
         // Show that the first row has address "Arches/Arches"
         assertThat(getString(outputPage.getBlock(2), 1)).isEqualTo("Arches/Arches");
@@ -171,7 +172,7 @@ Page[positions=8 0:Dict[VarWidth["Aaron", "Dave", "Dave", "Ed", "Aaron", "Carol"
     private Page makePageFromBlocks(int positionCount, Optional<boolean[]> rowIdNulls, Block[] rowIdBlocks, Block[] mergeCaseBlocks)
     {
         Block[] pageBlocks = new Block[] {
-                RowBlock.fromFieldBlocks(positionCount, rowIdNulls, rowIdBlocks),
+                RowBlock.fromNotNullSuppressedFieldBlocks(positionCount, rowIdNulls, rowIdBlocks),
                 RowBlock.fromFieldBlocks(positionCount, Optional.empty(), mergeCaseBlocks)
         };
         return new Page(pageBlocks);
@@ -198,7 +199,7 @@ Page[positions=8 0:Dict[VarWidth["Aaron", "Dave", "Dave", "Ed", "Aaron", "Carol"
 
     private LongArrayBlock makeLongArrayBlockWithNulls(boolean[] nulls, int positionCount, long... elements)
     {
-        assertThat(countNonNull(nulls) + elements.length).isEqualTo(positionCount);
+        assertThat(elements.length).isEqualTo(positionCount);
         return new LongArrayBlock(elements.length, Optional.of(nulls), elements);
     }
 
@@ -209,19 +210,8 @@ Page[positions=8 0:Dict[VarWidth["Aaron", "Dave", "Dave", "Ed", "Aaron", "Carol"
 
     private IntArrayBlock makeIntArrayBlockWithNulls(boolean[] nulls, int positionCount, int... elements)
     {
-        assertThat(countNonNull(nulls) + elements.length).isEqualTo(positionCount);
+        assertThat(elements.length).isEqualTo(positionCount);
         return new IntArrayBlock(elements.length, Optional.of(nulls), elements);
-    }
-
-    private int countNonNull(boolean[] nulls)
-    {
-        int count = 0;
-        for (int position = 0; position < nulls.length; position++) {
-            if (nulls[position]) {
-                count++;
-            }
-        }
-        return count;
     }
 
     private ByteArrayBlock makeByteArrayBlock(int... elements)
@@ -237,7 +227,12 @@ Page[positions=8 0:Dict[VarWidth["Aaron", "Dave", "Dave", "Ed", "Aaron", "Carol"
     {
         BlockBuilder builder = VARCHAR.createBlockBuilder(new PageBuilderStatus().createBlockBuilderStatus(), elements.length);
         for (String element : elements) {
-            VARCHAR.writeSlice(builder, Slices.utf8Slice(element));
+            if (element == null) {
+                builder.appendNull();
+            }
+            else {
+                VARCHAR.writeSlice(builder, Slices.utf8Slice(element));
+            }
         }
         return builder.build();
     }

@@ -22,8 +22,10 @@ import io.trino.filesystem.TrinoInputFile;
 import io.trino.filesystem.TrinoOutputFile;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.Optional;
+import java.util.Set;
 
 import static io.trino.filesystem.tracing.Tracing.withTracing;
 import static java.util.Objects.requireNonNull;
@@ -43,19 +45,25 @@ final class TracingFileSystem
     @Override
     public TrinoInputFile newInputFile(Location location)
     {
-        return new TracingInputFile(tracer, delegate.newInputFile(location), Optional.empty());
+        return new TracingInputFile(tracer, delegate.newInputFile(location), Optional.empty(), Optional.empty());
     }
 
     @Override
     public TrinoInputFile newInputFile(Location location, long length)
     {
-        return new TracingInputFile(tracer, delegate.newInputFile(location, length), Optional.of(length));
+        return new TracingInputFile(tracer, delegate.newInputFile(location, length), Optional.of(length), Optional.empty());
     }
 
     @Override
     public TrinoOutputFile newOutputFile(Location location)
     {
         return new TracingOutputFile(tracer, delegate.newOutputFile(location));
+    }
+
+    @Override
+    public TrinoInputFile newInputFile(Location location, long length, Instant instant)
+    {
+        return new TracingInputFile(tracer, delegate.newInputFile(location, length), Optional.of(length), Optional.ofNullable(instant));
     }
 
     @Override
@@ -116,5 +124,45 @@ final class TracingFileSystem
                 .setAttribute(FileSystemAttributes.FILE_LOCATION, location.toString())
                 .startSpan();
         return withTracing(span, () -> delegate.directoryExists(location));
+    }
+
+    @Override
+    public void createDirectory(Location location)
+            throws IOException
+    {
+        Span span = tracer.spanBuilder("FileSystem.createDirectory")
+                .setAttribute(FileSystemAttributes.FILE_LOCATION, location.toString())
+                .startSpan();
+        withTracing(span, () -> delegate.createDirectory(location));
+    }
+
+    @Override
+    public void renameDirectory(Location source, Location target)
+            throws IOException
+    {
+        Span span = tracer.spanBuilder("FileSystem.renameDirectory")
+                .setAttribute(FileSystemAttributes.FILE_LOCATION, source.toString())
+                .startSpan();
+        withTracing(span, () -> delegate.renameDirectory(source, target));
+    }
+
+    @Override
+    public Set<Location> listDirectories(Location location)
+            throws IOException
+    {
+        Span span = tracer.spanBuilder("FileSystem.listDirectories")
+                .setAttribute(FileSystemAttributes.FILE_LOCATION, location.toString())
+                .startSpan();
+        return withTracing(span, () -> delegate.listDirectories(location));
+    }
+
+    @Override
+    public Optional<Location> createTemporaryDirectory(Location targetPath, String temporaryPrefix, String relativePrefix)
+            throws IOException
+    {
+        Span span = tracer.spanBuilder("FileSystem.createTemporaryDirectory")
+                .setAttribute(FileSystemAttributes.FILE_LOCATION, targetPath.toString())
+                .startSpan();
+        return withTracing(span, () -> delegate.createTemporaryDirectory(targetPath, temporaryPrefix, relativePrefix));
     }
 }

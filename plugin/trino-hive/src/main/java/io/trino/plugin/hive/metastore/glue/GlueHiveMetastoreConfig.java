@@ -42,12 +42,12 @@ public class GlueHiveMetastoreConfig
     private Optional<String> awsAccessKey = Optional.empty();
     private Optional<String> awsSecretKey = Optional.empty();
     private Optional<String> awsCredentialsProvider = Optional.empty();
+    private boolean useWebIdentityTokenCredentialsProvider;
     private Optional<String> catalogId = Optional.empty();
     private int partitionSegments = 5;
-    private int getPartitionThreads = 20;
-    private int readStatisticsThreads = 5;
-    private int writeStatisticsThreads = 20;
+    private int threads = 40;
     private boolean assumeCanonicalPartitionKeys;
+    private boolean skipArchive;
 
     public Optional<String> getGlueRegion()
     {
@@ -221,6 +221,20 @@ public class GlueHiveMetastoreConfig
         return this;
     }
 
+    public boolean isUseWebIdentityTokenCredentialsProvider()
+    {
+        return useWebIdentityTokenCredentialsProvider;
+    }
+
+    @Config("hive.metastore.glue.use-web-identity-token-credentials-provider")
+    @ConfigDescription("If true, explicitly use the WebIdentityTokenCredentialsProvider" +
+            " instead of the default credential provider chain.")
+    public GlueHiveMetastoreConfig setUseWebIdentityTokenCredentialsProvider(boolean useWebIdentityTokenCredentialsProvider)
+    {
+        this.useWebIdentityTokenCredentialsProvider = useWebIdentityTokenCredentialsProvider;
+        return this;
+    }
+
     public Optional<String> getCatalogId()
     {
         return catalogId;
@@ -263,16 +277,16 @@ public class GlueHiveMetastoreConfig
     }
 
     @Min(1)
-    public int getGetPartitionThreads()
+    public int getThreads()
     {
-        return getPartitionThreads;
+        return threads;
     }
 
     @Config("hive.metastore.glue.get-partition-threads")
     @ConfigDescription("Number of threads for parallel partition fetches from Glue")
-    public GlueHiveMetastoreConfig setGetPartitionThreads(int getPartitionThreads)
+    public GlueHiveMetastoreConfig setThreads(int threads)
     {
-        this.getPartitionThreads = getPartitionThreads;
+        this.threads = threads;
         return this;
     }
 
@@ -289,31 +303,16 @@ public class GlueHiveMetastoreConfig
         return this;
     }
 
-    @Min(1)
-    public int getReadStatisticsThreads()
+    public boolean isSkipArchive()
     {
-        return readStatisticsThreads;
+        return skipArchive;
     }
 
-    @Config("hive.metastore.glue.read-statistics-threads")
-    @ConfigDescription("Number of threads for parallel statistics reads from Glue")
-    public GlueHiveMetastoreConfig setReadStatisticsThreads(int getReadStatisticsThreads)
+    @Config("hive.metastore.glue.skip-archive")
+    @ConfigDescription("Skip archiving an old table version when updating a table in the Glue metastore")
+    public GlueHiveMetastoreConfig setSkipArchive(boolean skipArchive)
     {
-        this.readStatisticsThreads = getReadStatisticsThreads;
-        return this;
-    }
-
-    @Min(1)
-    public int getWriteStatisticsThreads()
-    {
-        return writeStatisticsThreads;
-    }
-
-    @Config("hive.metastore.glue.write-statistics-threads")
-    @ConfigDescription("Number of threads for parallel statistics writes to Glue")
-    public GlueHiveMetastoreConfig setWriteStatisticsThreads(int writeStatisticsThreads)
-    {
-        this.writeStatisticsThreads = writeStatisticsThreads;
+        this.skipArchive = skipArchive;
         return this;
     }
 

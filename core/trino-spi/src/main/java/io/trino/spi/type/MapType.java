@@ -87,6 +87,7 @@ public class MapType
 
     private final MethodHandle keyBlockNativeNotDistinctFrom;
     private final MethodHandle keyBlockNotDistinctFrom;
+    private final MethodHandle keyBlockIdentical;
     private final MethodHandle keyNativeHashCode;
     private final MethodHandle keyBlockHashCode;
     private final MethodHandle keyBlockNativeEqual;
@@ -117,6 +118,7 @@ public class MapType
         keyBlockNativeNotDistinctFrom = filterReturnValue(typeOperators.getDistinctFromOperator(keyType, simpleConvention(FAIL_ON_NULL, BLOCK_POSITION, NEVER_NULL)), NOT)
                 .asType(methodType(boolean.class, Block.class, int.class, keyType.getJavaType().isPrimitive() ? keyType.getJavaType() : Object.class));
         keyBlockNotDistinctFrom = filterReturnValue(typeOperators.getDistinctFromOperator(keyType, simpleConvention(FAIL_ON_NULL, BLOCK_POSITION, BLOCK_POSITION)), NOT);
+        keyBlockIdentical = typeOperators.getDistinctFromOperator(keyType, simpleConvention(FAIL_ON_NULL, BLOCK_POSITION, BLOCK_POSITION));
 
         keyNativeHashCode = typeOperators.getHashCodeOperator(keyType, HASH_CODE_CONVENTION)
                 .asType(methodType(long.class, keyType.getJavaType().isPrimitive() ? keyType.getJavaType() : Object.class));
@@ -339,6 +341,14 @@ public class MapType
     public MethodHandle getKeyBlockNotDistinctFrom()
     {
         return keyBlockNotDistinctFrom;
+    }
+
+    /**
+     * Internal use by this package and io.trino.spi.block only.
+     */
+    public MethodHandle getKeyBlockIdentical()
+    {
+        return keyBlockIdentical;
     }
 
     private static long hashOperator(MethodHandle keyOperator, MethodHandle valueOperator, Block block)

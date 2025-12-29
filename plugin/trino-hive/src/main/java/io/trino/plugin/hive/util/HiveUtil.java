@@ -28,7 +28,6 @@ import io.trino.plugin.hive.HiveColumnHandle;
 import io.trino.plugin.hive.HivePartitionKey;
 import io.trino.plugin.hive.HiveTimestampPrecision;
 import io.trino.plugin.hive.HiveType;
-import io.trino.plugin.hive.aws.athena.PartitionProjectionService;
 import io.trino.plugin.hive.metastore.Column;
 import io.trino.plugin.hive.metastore.SortingColumn;
 import io.trino.plugin.hive.metastore.Table;
@@ -64,7 +63,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.Properties;
 import java.util.function.Function;
 
 import static com.google.common.base.Strings.isNullOrEmpty;
@@ -97,6 +95,7 @@ import static io.trino.plugin.hive.HiveTableProperties.ORC_BLOOM_FILTER_FPP;
 import static io.trino.plugin.hive.HiveType.toHiveTypes;
 import static io.trino.plugin.hive.metastore.SortingColumn.Order.ASCENDING;
 import static io.trino.plugin.hive.metastore.SortingColumn.Order.DESCENDING;
+import static io.trino.plugin.hive.projection.PartitionProjectionProperties.getPartitionProjectionTrinoColumnProperties;
 import static io.trino.plugin.hive.util.HiveBucketing.isSupportedBucketing;
 import static io.trino.plugin.hive.util.HiveClassNames.HUDI_INPUT_FORMAT;
 import static io.trino.plugin.hive.util.HiveClassNames.HUDI_PARQUET_INPUT_FORMAT;
@@ -132,7 +131,6 @@ import static java.lang.String.format;
 import static java.math.RoundingMode.UNNECESSARY;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Locale.ENGLISH;
-import static java.util.Objects.requireNonNull;
 
 public final class HiveUtil
 {
@@ -182,9 +180,16 @@ public final class HiveUtil
     {
     }
 
-    public static Optional<String> getInputFormatName(Properties schema)
+    public static Optional<String> getInputFormatName(Map<String, String> schema)
     {
-        return Optional.ofNullable(schema.getProperty(FILE_INPUT_FORMAT));
+        return Optional.ofNullable(schema.get(FILE_INPUT_FORMAT));
+    }
+
+    public static String getSerializationLibraryName(Map<String, String> schema)
+    {
+        String name = schema.get(SERIALIZATION_LIB);
+        checkCondition(name != null, HIVE_INVALID_METADATA, "Table or partition is missing Hive deserializer property: %s", SERIALIZATION_LIB);
+        return name;
     }
 
     private static long parseHiveDate(String value)
@@ -201,9 +206,9 @@ public final class HiveUtil
         return HIVE_TIMESTAMP_PARSER.parseMillis(value) * MICROSECONDS_PER_MILLISECOND;
     }
 
-    public static String getDeserializerClassName(Properties schema)
+    public static String getDeserializerClassName(Map<String, String> schema)
     {
-        String name = schema.getProperty(SERIALIZATION_LIB);
+        String name = schema.get(SERIALIZATION_LIB);
         checkCondition(name != null, HIVE_INVALID_METADATA, "Table or partition is missing Hive deserializer property: %s", SERIALIZATION_LIB);
         return name;
     }
@@ -701,19 +706,19 @@ public final class HiveUtil
                 .collect(toImmutableList());
     }
 
-    public static int getHeaderCount(Properties schema)
+    public static int getHeaderCount(Map<String, String> schema)
     {
         return getPositiveIntegerValue(schema, SKIP_HEADER_COUNT_KEY, "0");
     }
 
-    public static int getFooterCount(Properties schema)
+    public static int getFooterCount(Map<String, String> schema)
     {
         return getPositiveIntegerValue(schema, SKIP_FOOTER_COUNT_KEY, "0");
     }
 
-    private static int getPositiveIntegerValue(Properties schema, String key, String defaultValue)
+    private static int getPositiveIntegerValue(Map<String, String> schema, String key, String defaultValue)
     {
-        String value = schema.getProperty(key, defaultValue);
+        String value = schema.getOrDefault(key, defaultValue);
         try {
             int intValue = parseInt(value);
             if (intValue < 0) {
@@ -726,30 +731,33 @@ public final class HiveUtil
         }
     }
 
-    public static List<String> getColumnNames(Properties schema)
+    public static List<String> getColumnNames(Map<String, String> schema)
     {
-        return COLUMN_NAMES_SPLITTER.splitToList(schema.getProperty(LIST_COLUMNS, ""));
+        return COLUMN_NAMES_SPLITTER.splitToList(schema.getOrDefault(LIST_COLUMNS, ""));
     }
 
-    public static List<HiveType> getColumnTypes(Properties schema)
+    public static List<HiveType> getColumnTypes(Map<String, String> schema)
     {
-        return toHiveTypes(schema.getProperty(LIST_COLUMN_TYPES, ""));
+        return toHiveTypes(schema.getOrDefault(LIST_COLUMN_TYPES, ""));
     }
 
-    public static OrcWriterOptions getOrcWriterOptions(Properties schema, OrcWriterOptions orcWriterOptions)
+    public static OrcWriterOptions getOrcWriterOptions(Map<String, String> schema, OrcWriterOptions orcWriterOptions)
     {
         if (schema.containsKey(ORC_BLOOM_FILTER_COLUMNS_KEY)) {
             if (!schema.containsKey(ORC_BLOOM_FILTER_FPP_KEY)) {
                 throw new TrinoException(HIVE_INVALID_METADATA, "FPP for bloom filter is missing");
             }
             try {
-                double fpp = parseDouble(schema.getProperty(ORC_BLOOM_FILTER_FPP_KEY));
+                // use default fpp DEFAULT_BLOOM_FILTER_FPP if fpp key does not exist in table metadata
+                double fpp = schema.containsKey(ORC_BLOOM_FILTER_FPP_KEY)
+                        ? parseDouble(schema.get(ORC_BLOOM_FILTER_FPP_KEY))
+                        : orcWriterOptions.getBloomFilterFpp();
                 return orcWriterOptions
-                        .withBloomFilterColumns(ImmutableSet.copyOf(COLUMN_NAMES_SPLITTER.splitToList(schema.getProperty(ORC_BLOOM_FILTER_COLUMNS_KEY))))
+                        .withBloomFilterColumns(ImmutableSet.copyOf(COLUMN_NAMES_SPLITTER.splitToList(schema.get(ORC_BLOOM_FILTER_COLUMNS_KEY))))
                         .withBloomFilterFpp(fpp);
             }
             catch (NumberFormatException e) {
-                throw new TrinoException(HIVE_UNSUPPORTED_FORMAT, format("Invalid value for %s property: %s", ORC_BLOOM_FILTER_FPP, schema.getProperty(ORC_BLOOM_FILTER_FPP_KEY)));
+                throw new TrinoException(HIVE_UNSUPPORTED_FORMAT, format("Invalid value for %s property: %s", ORC_BLOOM_FILTER_FPP, schema.get(ORC_BLOOM_FILTER_FPP_KEY)));
             }
         }
         return orcWriterOptions;
@@ -810,10 +818,11 @@ public final class HiveUtil
 
     public static boolean isHudiTable(Table table)
     {
-        requireNonNull(table, "table is null");
-        @Nullable
-        String inputFormat = table.getStorage().getStorageFormat().getInputFormatNullable();
+        return isHudiTable(table.getStorage().getStorageFormat().getInputFormatNullable());
+    }
 
+    public static boolean isHudiTable(String inputFormat)
+    {
         return HUDI_PARQUET_INPUT_FORMAT.equals(inputFormat) ||
                 HUDI_PARQUET_REALTIME_INPUT_FORMAT.equals(inputFormat) ||
                 HUDI_INPUT_FORMAT.equals(inputFormat) ||
@@ -856,7 +865,7 @@ public final class HiveUtil
                 .setComment(handle.isHidden() ? Optional.empty() : columnComment.get(handle.getName()))
                 .setExtraInfo(Optional.ofNullable(columnExtraInfo(handle.isPartitionKey())))
                 .setHidden(handle.isHidden())
-                .setProperties(PartitionProjectionService.getPartitionProjectionTrinoColumnProperties(table, handle.getName()))
+                .setProperties(getPartitionProjectionTrinoColumnProperties(table, handle.getName()))
                 .build();
     }
 

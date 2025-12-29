@@ -13,15 +13,18 @@
  */
 package io.trino.parquet.writer.repdef;
 
+import io.trino.parquet.writer.valuewriter.ColumnDescriptorValuesWriter;
+import io.trino.spi.block.ArrayBlock;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.ColumnarArray;
 import io.trino.spi.block.ColumnarMap;
-import io.trino.spi.block.ColumnarRow;
-import org.apache.parquet.column.values.ValuesWriter;
+import io.trino.spi.block.MapBlock;
+import io.trino.spi.block.RowBlock;
 
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static io.trino.spi.PageBlockUtil.getUnderlyingValueBlock;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
@@ -31,12 +34,10 @@ public class DefLevelWriterProviders
 
     public static DefLevelWriterProvider of(Block block, int maxDefinitionLevel)
     {
+        if (getUnderlyingValueBlock(block) instanceof RowBlock) {
+            return new RowDefLevelWriterProvider(block, maxDefinitionLevel);
+        }
         return new PrimitiveDefLevelWriterProvider(block, maxDefinitionLevel);
-    }
-
-    public static DefLevelWriterProvider of(ColumnarRow columnarRow, int maxDefinitionLevel)
-    {
-        return new ColumnRowDefLevelWriterProvider(columnarRow, maxDefinitionLevel);
     }
 
     public static DefLevelWriterProvider of(ColumnarArray columnarArray, int maxDefinitionLevel)
@@ -59,10 +60,13 @@ public class DefLevelWriterProviders
         {
             this.block = requireNonNull(block, "block is null");
             this.maxDefinitionLevel = maxDefinitionLevel;
+            checkArgument(!(getUnderlyingValueBlock(block) instanceof RowBlock), "block is a row block");
+            checkArgument(!(getUnderlyingValueBlock(block) instanceof ArrayBlock), "block is an array block");
+            checkArgument(!(getUnderlyingValueBlock(block) instanceof MapBlock), "block is a map block");
         }
 
         @Override
-        public DefinitionLevelWriter getDefinitionLevelWriter(Optional<DefinitionLevelWriter> nestedWriter, ValuesWriter encoder)
+        public DefinitionLevelWriter getDefinitionLevelWriter(Optional<DefinitionLevelWriter> nestedWriter, ColumnDescriptorValuesWriter encoder)
         {
             checkArgument(nestedWriter.isEmpty(), "nestedWriter should be empty for primitive definition level writer");
             return new DefinitionLevelWriter()
@@ -81,9 +85,7 @@ public class DefLevelWriterProviders
                     checkValidPosition(offset, positionsCount, block.getPositionCount());
                     int nonNullsCount = 0;
                     if (!block.mayHaveNull()) {
-                        for (int position = offset; position < offset + positionsCount; position++) {
-                            encoder.writeInteger(maxDefinitionLevel);
-                        }
+                        encoder.writeRepeatInteger(maxDefinitionLevel, positionsCount);
                         nonNullsCount = positionsCount;
                     }
                     else {
@@ -100,20 +102,21 @@ public class DefLevelWriterProviders
         }
     }
 
-    static class ColumnRowDefLevelWriterProvider
+    static class RowDefLevelWriterProvider
             implements DefLevelWriterProvider
     {
-        private final ColumnarRow columnarRow;
+        private final Block block;
         private final int maxDefinitionLevel;
 
-        ColumnRowDefLevelWriterProvider(ColumnarRow columnarRow, int maxDefinitionLevel)
+        RowDefLevelWriterProvider(Block block, int maxDefinitionLevel)
         {
-            this.columnarRow = requireNonNull(columnarRow, "columnarRow is null");
+            this.block = requireNonNull(block, "block is null");
             this.maxDefinitionLevel = maxDefinitionLevel;
+            checkArgument(getUnderlyingValueBlock(block) instanceof RowBlock, "block is not a row block");
         }
 
         @Override
-        public DefinitionLevelWriter getDefinitionLevelWriter(Optional<DefinitionLevelWriter> nestedWriterOptional, ValuesWriter encoder)
+        public DefinitionLevelWriter getDefinitionLevelWriter(Optional<DefinitionLevelWriter> nestedWriterOptional, ColumnDescriptorValuesWriter encoder)
         {
             checkArgument(nestedWriterOptional.isPresent(), "nestedWriter should be present for column row definition level writer");
             return new DefinitionLevelWriter()
@@ -125,21 +128,21 @@ public class DefLevelWriterProviders
                 @Override
                 public ValuesCount writeDefinitionLevels()
                 {
-                    return writeDefinitionLevels(columnarRow.getPositionCount());
+                    return writeDefinitionLevels(block.getPositionCount());
                 }
 
                 @Override
                 public ValuesCount writeDefinitionLevels(int positionsCount)
                 {
-                    checkValidPosition(offset, positionsCount, columnarRow.getPositionCount());
-                    if (!columnarRow.mayHaveNull()) {
+                    checkValidPosition(offset, positionsCount, block.getPositionCount());
+                    if (!block.mayHaveNull()) {
                         offset += positionsCount;
                         return nestedWriter.writeDefinitionLevels(positionsCount);
                     }
                     int maxDefinitionValuesCount = 0;
                     int totalValuesCount = 0;
                     for (int position = offset; position < offset + positionsCount; ) {
-                        if (columnarRow.isNull(position)) {
+                        if (block.isNull(position)) {
                             encoder.writeInteger(maxDefinitionLevel - 1);
                             totalValuesCount++;
                             position++;
@@ -147,7 +150,7 @@ public class DefLevelWriterProviders
                         else {
                             int consecutiveNonNullsCount = 1;
                             position++;
-                            while (position < offset + positionsCount && !columnarRow.isNull(position)) {
+                            while (position < offset + positionsCount && !block.isNull(position)) {
                                 position++;
                                 consecutiveNonNullsCount++;
                             }
@@ -176,7 +179,7 @@ public class DefLevelWriterProviders
         }
 
         @Override
-        public DefinitionLevelWriter getDefinitionLevelWriter(Optional<DefinitionLevelWriter> nestedWriterOptional, ValuesWriter encoder)
+        public DefinitionLevelWriter getDefinitionLevelWriter(Optional<DefinitionLevelWriter> nestedWriterOptional, ColumnDescriptorValuesWriter encoder)
         {
             checkArgument(nestedWriterOptional.isPresent(), "nestedWriter should be present for column map definition level writer");
             return new DefinitionLevelWriter()
@@ -261,7 +264,7 @@ public class DefLevelWriterProviders
         }
 
         @Override
-        public DefinitionLevelWriter getDefinitionLevelWriter(Optional<DefinitionLevelWriter> nestedWriterOptional, ValuesWriter encoder)
+        public DefinitionLevelWriter getDefinitionLevelWriter(Optional<DefinitionLevelWriter> nestedWriterOptional, ColumnDescriptorValuesWriter encoder)
         {
             checkArgument(nestedWriterOptional.isPresent(), "nestedWriter should be present for column map definition level writer");
             return new DefinitionLevelWriter()

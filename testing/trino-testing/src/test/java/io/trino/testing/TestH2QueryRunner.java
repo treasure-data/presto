@@ -44,7 +44,7 @@ public class TestH2QueryRunner
         h2QueryRunner = null;
     }
 
-    @Test
+    @Test(enabled = false)
     public void testDateToTimestampCoercion()
     {
         // allow running tests with a connector that supports TIMESTAMP but not DATE

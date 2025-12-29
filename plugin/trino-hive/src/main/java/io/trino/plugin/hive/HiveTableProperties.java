@@ -30,9 +30,9 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static io.trino.plugin.hive.aws.athena.PartitionProjectionProperties.PARTITION_PROJECTION_ENABLED;
-import static io.trino.plugin.hive.aws.athena.PartitionProjectionProperties.PARTITION_PROJECTION_IGNORE;
-import static io.trino.plugin.hive.aws.athena.PartitionProjectionProperties.PARTITION_PROJECTION_LOCATION_TEMPLATE;
+import static io.trino.plugin.hive.projection.PartitionProjectionProperties.PARTITION_PROJECTION_ENABLED;
+import static io.trino.plugin.hive.projection.PartitionProjectionProperties.PARTITION_PROJECTION_IGNORE;
+import static io.trino.plugin.hive.projection.PartitionProjectionProperties.PARTITION_PROJECTION_LOCATION_TEMPLATE;
 import static io.trino.plugin.hive.util.HiveBucketing.BucketingVersion.BUCKETING_V1;
 import static io.trino.plugin.hive.util.HiveBucketing.BucketingVersion.BUCKETING_V2;
 import static io.trino.spi.StandardErrorCode.INVALID_TABLE_PROPERTY;
@@ -66,6 +66,7 @@ public class HiveTableProperties
     public static final String CSV_SEPARATOR = "csv_separator";
     public static final String CSV_QUOTE = "csv_quote";
     public static final String CSV_ESCAPE = "csv_escape";
+    public static final String PARQUET_BLOOM_FILTER_COLUMNS = "parquet_bloom_filter_columns";
     public static final String REGEX_PATTERN = "regex";
     public static final String REGEX_CASE_INSENSITIVE = "regex_case_insensitive";
     public static final String TRANSACTIONAL = "transactional";
@@ -244,12 +245,12 @@ public class HiveTableProperties
         return partitionedBy == null ? ImmutableList.of() : ImmutableList.copyOf(partitionedBy);
     }
 
-    public static Optional<HiveBucketProperty> getBucketProperty(Map<String, Object> tableProperties)
+    public static Optional<HiveWritableTableHandle.BucketInfo> getBucketInfo(Map<String, Object> tableProperties)
     {
         List<String> bucketedBy = getBucketedBy(tableProperties);
         List<SortingColumn> sortedBy = getSortedBy(tableProperties);
         int bucketCount = (Integer) tableProperties.get(BUCKET_COUNT_PROPERTY);
-        if ((bucketedBy.isEmpty()) && (bucketCount == 0)) {
+        if (bucketedBy.isEmpty() && (bucketCount == 0)) {
             if (!sortedBy.isEmpty()) {
                 throw new TrinoException(INVALID_TABLE_PROPERTY, format("%s may be specified only when %s is specified", SORTED_BY_PROPERTY, BUCKETED_BY_PROPERTY));
             }
@@ -262,7 +263,7 @@ public class HiveTableProperties
             throw new TrinoException(INVALID_TABLE_PROPERTY, format("%s and %s must be specified together", BUCKETED_BY_PROPERTY, BUCKET_COUNT_PROPERTY));
         }
         BucketingVersion bucketingVersion = getBucketingVersion(tableProperties);
-        return Optional.of(new HiveBucketProperty(bucketedBy, bucketingVersion, bucketCount, sortedBy));
+        return Optional.of(new HiveWritableTableHandle.BucketInfo(bucketedBy, bucketingVersion, bucketCount, sortedBy));
     }
 
     public static BucketingVersion getBucketingVersion(Map<String, Object> tableProperties)
@@ -293,6 +294,12 @@ public class HiveTableProperties
     public static List<String> getOrcBloomFilterColumns(Map<String, Object> tableProperties)
     {
         return (List<String>) tableProperties.get(ORC_BLOOM_FILTER_COLUMNS);
+    }
+
+    @SuppressWarnings("unchecked")
+    public static List<String> getParquetBloomFilterColumns(Map<String, Object> tableProperties)
+    {
+        return (List<String>) tableProperties.get(PARQUET_BLOOM_FILTER_COLUMNS);
     }
 
     public static Double getOrcBloomFilterFpp(Map<String, Object> tableProperties)

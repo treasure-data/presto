@@ -17,9 +17,8 @@ import org.testng.annotations.Test;
 
 import java.util.Optional;
 
-import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
-import static io.trino.testing.assertions.TrinoExceptionAssert.assertTrinoExceptionThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
@@ -33,10 +32,10 @@ public class TestIcebergTableName
         assertParseNameAndType("abc$history", "abc", TableType.HISTORY);
         assertParseNameAndType("abc$snapshots", "abc", TableType.SNAPSHOTS);
 
-        assertNoValidTableType("abc$data");
+        assertInvalid("abc$data");
         assertInvalid("abc@123", "Invalid Iceberg table name: abc@123");
         assertInvalid("abc@xyz", "Invalid Iceberg table name: abc@xyz");
-        assertNoValidTableType("abc$what");
+        assertInvalid("abc$what");
         assertInvalid("abc@123$data@456", "Invalid Iceberg table name: abc@123$data@456");
         assertInvalid("abc@123$snapshots", "Invalid Iceberg table name: abc@123$snapshots");
         assertInvalid("abc$snapshots@456", "Invalid Iceberg table name: abc$snapshots@456");
@@ -83,20 +82,22 @@ public class TestIcebergTableName
 
     private static void assertInvalid(String inputName, String message)
     {
-        assertTrinoExceptionThrownBy(() -> IcebergTableName.tableTypeFrom(inputName))
-                .hasErrorCode(NOT_SUPPORTED)
+        assertThat(IcebergTableName.isIcebergTableName(inputName)).isFalse();
+
+        assertThatThrownBy(() -> IcebergTableName.tableTypeFrom(inputName))
+                .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(message);
     }
 
-    private static void assertNoValidTableType(String inputName)
+    private static void assertInvalid(String inputName)
     {
-        assertThat(IcebergTableName.tableTypeFrom(inputName))
-                .isEmpty();
+        assertInvalid(inputName, "Invalid Iceberg table name: " + inputName);
     }
 
     private static void assertParseNameAndType(String inputName, String tableName, TableType tableType)
     {
         assertEquals(IcebergTableName.tableNameFrom(inputName), tableName);
+        assertThat(IcebergTableName.tableNameFrom(inputName)).isEqualTo(tableName);
         assertEquals(IcebergTableName.tableTypeFrom(inputName), Optional.of(tableType));
     }
 }

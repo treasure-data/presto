@@ -14,20 +14,22 @@
 package io.trino.plugin.hive.procedure;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import io.trino.plugin.hive.HiveColumnHandle;
-import io.trino.plugin.hive.HiveMetastoreClosure;
 import io.trino.plugin.hive.HiveTableHandle;
 import io.trino.plugin.hive.PartitionStatistics;
 import io.trino.plugin.hive.TransactionalMetadata;
 import io.trino.plugin.hive.TransactionalMetadataFactory;
+import io.trino.plugin.hive.metastore.HiveMetastore;
 import io.trino.spi.TrinoException;
 import io.trino.spi.classloader.ThreadContextClassLoader;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorAccessControl;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.SchemaTableName;
+import io.trino.spi.connector.TableNotFoundException;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.procedure.Procedure;
 import io.trino.spi.procedure.Procedure.Argument;
@@ -36,10 +38,11 @@ import io.trino.spi.type.ArrayType;
 import java.lang.invoke.MethodHandle;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.trino.plugin.base.util.Procedures.checkProcedureArgument;
-import static io.trino.plugin.hive.acid.AcidTransaction.NO_ACID_TRANSACTION;
+import static io.trino.plugin.hive.metastore.StatisticsUpdateMode.CLEAR_ALL;
 import static io.trino.plugin.hive.util.HiveUtil.makePartName;
 import static io.trino.spi.StandardErrorCode.INVALID_PROCEDURE_ARGUMENT;
 import static io.trino.spi.type.VarcharType.VARCHAR;
@@ -100,6 +103,7 @@ public class DropStatsProcedure
         checkProcedureArgument(table != null, "table_name cannot be null");
 
         TransactionalMetadata hiveMetadata = hiveMetadataFactory.create(session.getIdentity(), true);
+        SchemaTableName schemaTableName = new SchemaTableName(schema, table);
         HiveTableHandle handle = (HiveTableHandle) hiveMetadata.getTableHandle(session, new SchemaTableName(schema, table));
         if (handle == null) {
             throw new TrinoException(INVALID_PROCEDURE_ARGUMENT, format("Table '%s' does not exist", new SchemaTableName(schema, table)));
@@ -114,7 +118,7 @@ public class DropStatsProcedure
                 .map(HiveColumnHandle::getName)
                 .collect(toImmutableList());
 
-        HiveMetastoreClosure metastore = hiveMetadata.getMetastore().unsafeGetRawHiveMetastoreClosure();
+        HiveMetastore metastore = hiveMetadata.getMetastore().unsafeGetRawHiveMetastore();
         if (partitionValues != null) {
             // drop stats for specified partitions
             List<List<String>> partitionStringValues = partitionValues.stream()
@@ -123,29 +127,34 @@ public class DropStatsProcedure
             validatePartitions(partitionStringValues, partitionColumns);
 
             partitionStringValues.forEach(values -> metastore.updatePartitionStatistics(
-                    schema,
-                    table,
-                    makePartName(partitionColumns, values),
-                    stats -> PartitionStatistics.empty()));
+                        metastore.getTable(schema, table)
+                                .orElseThrow(() -> new TableNotFoundException(schemaTableName)),
+                        CLEAR_ALL,
+                        ImmutableMap.of(
+                                makePartName(partitionColumns, values),
+                                PartitionStatistics.empty())));
         }
         else {
             // no partition specified, so drop stats for the entire table
             if (partitionColumns.isEmpty()) {
                 // for non-partitioned tables, just wipe table stats
                 metastore.updateTableStatistics(
-                        schema,
-                        table,
-                        NO_ACID_TRANSACTION,
-                        stats -> PartitionStatistics.empty());
+                            schema,
+                            table,
+                            OptionalLong.empty(),
+                            CLEAR_ALL,
+                            PartitionStatistics.empty());
             }
             else {
                 // the table is partitioned; remove stats for every partition
-                metastore.getPartitionNamesByFilter(handle.getSchemaName(), handle.getTableName(), partitionColumns, TupleDomain.all())
-                        .ifPresent(partitions -> partitions.forEach(partitionName -> metastore.updatePartitionStatistics(
-                                schema,
-                                table,
-                                partitionName,
-                                stats -> PartitionStatistics.empty())));
+                hiveMetadata.getMetastore().getPartitionNamesByFilter(schemaTableName.getSchemaName(), schemaTableName.getTableName(), partitionColumns, TupleDomain.all())
+                            .ifPresent(partitions -> partitions.forEach(partitionName -> metastore.updatePartitionStatistics(
+                                    metastore.getTable(schema, table)
+                                            .orElseThrow(() -> new TableNotFoundException(schemaTableName)),
+                                    CLEAR_ALL,
+                                    ImmutableMap.of(
+                                            partitionName,
+                                            PartitionStatistics.empty()))));
             }
         }
 

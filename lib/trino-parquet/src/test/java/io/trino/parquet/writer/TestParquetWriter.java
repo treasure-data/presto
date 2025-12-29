@@ -19,7 +19,11 @@ import io.airlift.units.DataSize;
 import io.trino.parquet.DataPage;
 import io.trino.parquet.DiskRange;
 import io.trino.parquet.ParquetDataSource;
+import io.trino.parquet.ParquetDataSourceId;
 import io.trino.parquet.ParquetReaderOptions;
+import io.trino.parquet.metadata.BlockMetadata;
+import io.trino.parquet.metadata.ColumnChunkMetadata;
+import io.trino.parquet.metadata.ParquetMetadata;
 import io.trino.parquet.reader.ChunkedInputStream;
 import io.trino.parquet.reader.MetadataReader;
 import io.trino.parquet.reader.PageReader;
@@ -28,9 +32,7 @@ import io.trino.spi.type.DecimalType;
 import io.trino.spi.type.Type;
 import org.apache.parquet.VersionParser;
 import org.apache.parquet.column.ColumnDescriptor;
-import org.apache.parquet.hadoop.metadata.BlockMetaData;
-import org.apache.parquet.hadoop.metadata.ColumnChunkMetaData;
-import org.apache.parquet.hadoop.metadata.ParquetMetadata;
+import org.apache.parquet.format.CompressionCodec;
 import org.apache.parquet.schema.PrimitiveType;
 import org.testng.annotations.Test;
 
@@ -90,13 +92,14 @@ public class TestParquetWriter
                 new ParquetReaderOptions());
         ParquetMetadata parquetMetadata = MetadataReader.readFooter(dataSource, Optional.empty());
         assertThat(parquetMetadata.getBlocks().size()).isEqualTo(1);
-        assertThat(parquetMetadata.getBlocks().get(0).getRowCount()).isEqualTo(100 * 1000);
+        assertThat(parquetMetadata.getBlocks().get(0).rowCount()).isEqualTo(100 * 1000);
 
-        ColumnChunkMetaData chunkMetaData = parquetMetadata.getBlocks().get(0).getColumns().get(0);
+        ColumnChunkMetadata chunkMetaData = parquetMetadata.getBlocks().get(0).columns().get(0);
         DiskRange range = new DiskRange(chunkMetaData.getStartingPos(), chunkMetaData.getTotalSize());
         Map<Integer, ChunkedInputStream> chunkReader = dataSource.planRead(ImmutableListMultimap.of(0, range), newSimpleAggregatedMemoryContext());
 
         PageReader pageReader = PageReader.createPageReader(
+                new ParquetDataSourceId("test"),
                 chunkReader.get(0),
                 chunkMetaData,
                 new ColumnDescriptor(new String[] {"columna"}, new PrimitiveType(REQUIRED, INT32, "columna"), 0, 0),
@@ -138,10 +141,10 @@ public class TestParquetWriter
 
         ParquetMetadata parquetMetadata = MetadataReader.readFooter(dataSource, Optional.empty());
         assertThat(parquetMetadata.getBlocks().size()).isGreaterThanOrEqualTo(10);
-        for (BlockMetaData blockMetaData : parquetMetadata.getBlocks()) {
+        for (BlockMetadata blockMetaData : parquetMetadata.getBlocks()) {
             // Verify that the columns are stored in the same order as the metadata
-            List<Long> offsets = blockMetaData.getColumns().stream()
-                    .map(ColumnChunkMetaData::getFirstDataPageOffset)
+            List<Long> offsets = blockMetaData.columns().stream()
+                    .map(ColumnChunkMetadata::getFirstDataPageOffset)
                     .collect(toImmutableList());
             assertThat(offsets).isSorted();
         }
@@ -160,7 +163,8 @@ public class TestParquetWriter
                         .setMaxPageSize(DataSize.ofBytes(1024))
                         .build(),
                 types,
-                columnNames);
+                columnNames,
+                CompressionCodec.SNAPPY);
         List<io.trino.spi.Page> inputPages = generateInputPages(types, 1000, 100);
 
         long previousRetainedBytes = 0;

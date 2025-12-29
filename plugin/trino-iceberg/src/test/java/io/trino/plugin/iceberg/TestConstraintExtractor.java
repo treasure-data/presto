@@ -381,6 +381,7 @@ public class TestConstraintExtractor
                 type,
                 ImmutableList.of(),
                 type,
+                true,
                 Optional.empty());
     }
 

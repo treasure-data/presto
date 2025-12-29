@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.iceberg;
 
+import io.trino.filesystem.Location;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.sql.TestTable;
 import org.testng.annotations.Test;
@@ -24,7 +25,6 @@ import java.util.stream.IntStream;
 import static io.trino.plugin.iceberg.IcebergFileFormat.PARQUET;
 import static io.trino.plugin.iceberg.IcebergTestUtils.checkParquetFileSorting;
 import static io.trino.plugin.iceberg.IcebergTestUtils.withSmallRowGroups;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertEquals;
 
 public class TestIcebergParquetConnectorTest
@@ -45,7 +45,9 @@ public class TestIcebergParquetConnectorTest
     protected boolean supportsRowGroupStatistics(String typeName)
     {
         return !(typeName.equalsIgnoreCase("varbinary") ||
+                typeName.equalsIgnoreCase("time") ||
                 typeName.equalsIgnoreCase("time(6)") ||
+                typeName.equalsIgnoreCase("timestamp(3) with time zone") ||
                 typeName.equalsIgnoreCase("timestamp(6) with time zone"));
     }
 
@@ -85,17 +87,8 @@ public class TestIcebergParquetConnectorTest
     }
 
     @Override
-    public void testDropAmbiguousRowFieldCaseSensitivity()
-    {
-        // TODO https://github.com/trinodb/trino/issues/16273 The connector can't read row types having ambiguous field names in Parquet files. e.g. row(X int, x int)
-        assertThatThrownBy(super::testDropAmbiguousRowFieldCaseSensitivity)
-                .hasMessageContaining("Error opening Iceberg split")
-                .hasStackTraceContaining("Multiple entries with same key");
-    }
-
-    @Override
     protected boolean isFileSorted(String path, String sortColumnName)
     {
-        return checkParquetFileSorting(path, sortColumnName);
+        return checkParquetFileSorting(fileSystem.newInputFile(Location.of(path)), sortColumnName);
     }
 }

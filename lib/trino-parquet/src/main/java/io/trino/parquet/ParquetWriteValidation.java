@@ -18,6 +18,10 @@ import io.airlift.slice.SizeOf;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.airlift.slice.XxHash64;
+import io.trino.parquet.metadata.ColumnChunkMetadata;
+import io.trino.parquet.metadata.IndexReference;
+import io.trino.parquet.metadata.PrunedBlockMetadata;
+import io.trino.parquet.reader.RowGroupInfo;
 import io.trino.spi.Page;
 import io.trino.spi.block.Block;
 import io.trino.spi.type.Type;
@@ -27,10 +31,7 @@ import org.apache.parquet.format.ColumnChunk;
 import org.apache.parquet.format.ColumnMetaData;
 import org.apache.parquet.format.RowGroup;
 import org.apache.parquet.format.converter.ParquetMetadataConverter;
-import org.apache.parquet.hadoop.metadata.BlockMetaData;
-import org.apache.parquet.hadoop.metadata.ColumnChunkMetaData;
 import org.apache.parquet.hadoop.metadata.ColumnPath;
-import org.apache.parquet.internal.hadoop.metadata.IndexReference;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
 
@@ -50,6 +51,7 @@ import static io.airlift.slice.SizeOf.estimatedSizeOf;
 import static io.airlift.slice.SizeOf.instanceSize;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static io.trino.parquet.ColumnStatisticsValidation.ColumnStatistics;
+import static io.trino.parquet.ParquetMetadataConverter.getPrimitive;
 import static io.trino.parquet.ParquetValidationUtils.validateParquet;
 import static io.trino.parquet.ParquetWriteValidation.IndexReferenceValidation.fromIndexReference;
 import static java.util.Objects.requireNonNull;
@@ -126,17 +128,17 @@ public class ParquetWriteValidation
         }
     }
 
-    public void validateBlocksMetadata(ParquetDataSourceId dataSourceId, List<BlockMetaData> blocksMetaData)
+    public void validateBlocksMetadata(ParquetDataSourceId dataSourceId, List<RowGroupInfo> rowGroupInfos)
             throws ParquetCorruptionException
     {
         validateParquet(
-                blocksMetaData.size() == rowGroups.size(),
+                rowGroupInfos.size() == rowGroups.size(),
                 dataSourceId,
                 "Number of row groups %d did not match %d",
-                blocksMetaData.size(),
+                rowGroupInfos.size(),
                 rowGroups.size());
-        for (int rowGroupIndex = 0; rowGroupIndex < blocksMetaData.size(); rowGroupIndex++) {
-            BlockMetaData block = blocksMetaData.get(rowGroupIndex);
+        for (int rowGroupIndex = 0; rowGroupIndex < rowGroupInfos.size(); rowGroupIndex++) {
+            PrunedBlockMetadata block = rowGroupInfos.get(rowGroupIndex).prunedBlockMetadata();
             RowGroup rowGroup = rowGroups.get(rowGroupIndex);
             validateParquet(
                     block.getRowCount() == rowGroup.getNum_rows(),
@@ -146,7 +148,7 @@ public class ParquetWriteValidation
                     rowGroupIndex,
                     rowGroup.getNum_rows());
 
-            List<ColumnChunkMetaData> columnChunkMetaData = block.getColumns();
+            List<ColumnChunkMetadata> columnChunkMetaData = block.getColumns();
             validateParquet(
                     columnChunkMetaData.size() == rowGroup.getColumnsSize(),
                     dataSourceId,
@@ -156,7 +158,7 @@ public class ParquetWriteValidation
                     rowGroup.getColumnsSize());
 
             for (int columnIndex = 0; columnIndex < columnChunkMetaData.size(); columnIndex++) {
-                ColumnChunkMetaData actualColumnMetadata = columnChunkMetaData.get(columnIndex);
+                ColumnChunkMetadata actualColumnMetadata = columnChunkMetaData.get(columnIndex);
                 ColumnChunk columnChunk = rowGroup.getColumns().get(columnIndex);
                 ColumnMetaData expectedColumnMetadata = columnChunk.getMeta_data();
                 verifyColumnMetadataMatch(
@@ -169,7 +171,7 @@ public class ParquetWriteValidation
                         expectedColumnMetadata.getCodec());
 
                 verifyColumnMetadataMatch(
-                        actualColumnMetadata.getPrimitiveType().getPrimitiveTypeName().equals(METADATA_CONVERTER.getPrimitive(expectedColumnMetadata.getType())),
+                        actualColumnMetadata.getPrimitiveType().getPrimitiveTypeName().equals(getPrimitive(expectedColumnMetadata.getType())),
                         "Type",
                         actualColumnMetadata.getPrimitiveType().getPrimitiveTypeName(),
                         actualColumnMetadata.getPath(),
@@ -356,10 +358,10 @@ public class ParquetWriteValidation
         }
     }
 
-    public void validateRowGroupStatistics(ParquetDataSourceId dataSourceId, BlockMetaData blockMetaData, List<ColumnStatistics> actualColumnStatistics)
+    public void validateRowGroupStatistics(ParquetDataSourceId dataSourceId, PrunedBlockMetadata blockMetaData, List<ColumnStatistics> actualColumnStatistics)
             throws ParquetCorruptionException
     {
-        List<ColumnChunkMetaData> columnChunks = blockMetaData.getColumns();
+        List<ColumnChunkMetadata> columnChunks = blockMetaData.getColumns();
         checkArgument(
                 columnChunks.size() == actualColumnStatistics.size(),
                 "Column chunk metadata count %s did not match column fields count %s",
@@ -367,7 +369,7 @@ public class ParquetWriteValidation
                 actualColumnStatistics.size());
 
         for (int columnIndex = 0; columnIndex < columnChunks.size(); columnIndex++) {
-            ColumnChunkMetaData columnMetaData = columnChunks.get(columnIndex);
+            ColumnChunkMetadata columnMetaData = columnChunks.get(columnIndex);
             ColumnStatistics columnStatistics = actualColumnStatistics.get(columnIndex);
             long expectedValuesCount = columnMetaData.getValueCount();
             validateParquet(

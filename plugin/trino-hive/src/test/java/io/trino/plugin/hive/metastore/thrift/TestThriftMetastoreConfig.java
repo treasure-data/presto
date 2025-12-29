@@ -37,7 +37,8 @@ public class TestThriftMetastoreConfig
     public void testDefaults()
     {
         assertRecordedDefaults(recordDefaults(ThriftMetastoreConfig.class)
-                .setMetastoreTimeout(new Duration(10, SECONDS))
+                .setConnectTimeout(new Duration(10, SECONDS))
+                .setReadTimeout(new Duration(10, SECONDS))
                 .setSocksProxy(null)
                 .setMaxRetries(9)
                 .setBackoffScaleFactor(2.0)
@@ -56,7 +57,8 @@ public class TestThriftMetastoreConfig
                 .setDeleteFilesOnDrop(false)
                 .setMaxWaitForTransactionLock(new Duration(10, MINUTES))
                 .setAssumeCanonicalPartitionKeys(false)
-                .setWriteStatisticsThreads(20));
+                .setWriteStatisticsThreads(20)
+                .setCatalogName(null));
     }
 
     @Test
@@ -67,7 +69,8 @@ public class TestThriftMetastoreConfig
         Path truststoreFile = Files.createTempFile(null, null);
 
         Map<String, String> properties = ImmutableMap.<String, String>builder()
-                .put("hive.metastore-timeout", "20s")
+                .put("hive.metastore.thrift.client.connect-timeout", "22s")
+                .put("hive.metastore.thrift.client.read-timeout", "44s")
                 .put("hive.metastore.thrift.client.socks-proxy", "localhost:1234")
                 .put("hive.metastore.thrift.client.max-retries", "15")
                 .put("hive.metastore.thrift.client.backoff-scale-factor", "3.0")
@@ -87,10 +90,12 @@ public class TestThriftMetastoreConfig
                 .put("hive.metastore.thrift.write-statistics-threads", "10")
                 .put("hive.metastore.thrift.assume-canonical-partition-keys", "true")
                 .put("hive.metastore.thrift.use-spark-table-statistics-fallback", "false")
+                .put("hive.metastore.thrift.catalog-name", "custom_catalog_name")
                 .buildOrThrow();
 
         ThriftMetastoreConfig expected = new ThriftMetastoreConfig()
-                .setMetastoreTimeout(new Duration(20, SECONDS))
+                .setConnectTimeout(new Duration(22, SECONDS))
+                .setReadTimeout(new Duration(44, SECONDS))
                 .setSocksProxy(HostAndPort.fromParts("localhost", 1234))
                 .setMaxRetries(15)
                 .setBackoffScaleFactor(3.0)
@@ -109,7 +114,8 @@ public class TestThriftMetastoreConfig
                 .setMaxWaitForTransactionLock(new Duration(5, MINUTES))
                 .setAssumeCanonicalPartitionKeys(true)
                 .setWriteStatisticsThreads(10)
-                .setUseSparkTableStatisticsFallback(false);
+                .setUseSparkTableStatisticsFallback(false)
+                .setCatalogName("custom_catalog_name");
 
         assertFullMapping(properties, expected);
     }

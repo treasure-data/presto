@@ -19,7 +19,6 @@ import io.trino.metadata.MaterializedViewDefinition;
 import io.trino.metadata.QualifiedObjectName;
 import io.trino.plugin.hive.TestingHivePlugin;
 import io.trino.plugin.hive.metastore.file.FileHiveMetastore;
-import io.trino.plugin.iceberg.catalog.file.TestingIcebergFileMetastoreCatalogModule;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.security.Identity;
 import io.trino.spi.security.SelectedRole;
@@ -34,7 +33,6 @@ import org.testng.annotations.Test;
 import java.io.File;
 import java.util.Optional;
 
-import static com.google.inject.util.Modules.EMPTY_MODULE;
 import static io.trino.plugin.hive.metastore.file.TestingFileHiveMetastore.createTestingFileHiveMetastore;
 import static io.trino.spi.security.SelectedRole.Type.ROLE;
 import static io.trino.testing.TestingSession.testSessionBuilder;
@@ -44,7 +42,6 @@ public class TestIcebergMetadataListing
         extends AbstractTestQueryFramework
 {
     private FileHiveMetastore metastore;
-    private SchemaTableName storageTable;
 
     @Override
     protected DistributedQueryRunner createQueryRunner()
@@ -61,9 +58,9 @@ public class TestIcebergMetadataListing
 
         metastore = createTestingFileHiveMetastore(baseDir);
 
-        queryRunner.installPlugin(new TestingIcebergPlugin(Optional.of(new TestingIcebergFileMetastoreCatalogModule(metastore)), Optional.empty(), EMPTY_MODULE));
+        queryRunner.installPlugin(new TestingIcebergPlugin(baseDir.toPath()));
         queryRunner.createCatalog("iceberg", "iceberg");
-        queryRunner.installPlugin(new TestingHivePlugin(metastore));
+        queryRunner.installPlugin(new TestingHivePlugin(baseDir.toPath(), metastore));
         queryRunner.createCatalog("hive", "hive", ImmutableMap.of("hive.security", "sql-standard"));
 
         return queryRunner;
@@ -77,7 +74,6 @@ public class TestIcebergMetadataListing
         assertQuerySucceeds("CREATE TABLE iceberg.test_schema.iceberg_table2 (_double DOUBLE) WITH (partitioning = ARRAY['_double'])");
         assertQuerySucceeds("CREATE MATERIALIZED VIEW iceberg.test_schema.iceberg_materialized_view AS " +
                 "SELECT * FROM iceberg.test_schema.iceberg_table1");
-        storageTable = getStorageTable("iceberg", "test_schema", "iceberg_materialized_view");
         assertQuerySucceeds("CREATE VIEW iceberg.test_schema.iceberg_view AS SELECT * FROM iceberg.test_schema.iceberg_table1");
 
         assertQuerySucceeds("CREATE TABLE hive.test_schema.hive_table (_double DOUBLE)");
@@ -99,12 +95,12 @@ public class TestIcebergMetadataListing
     @Test
     public void testTableListing()
     {
-        assertThat(metastore.getAllTables("test_schema"))
+        assertThat(metastore.getTables("test_schema"))
+                .extracting(table -> table.tableName().getTableName())
                 .containsExactlyInAnyOrder(
                         "iceberg_table1",
                         "iceberg_table2",
                         "iceberg_materialized_view",
-                        storageTable.getTableName(),
                         "iceberg_view",
                         "hive_table",
                         "hive_view");
@@ -115,7 +111,6 @@ public class TestIcebergMetadataListing
                         "'iceberg_table1', " +
                         "'iceberg_table2', " +
                         "'iceberg_materialized_view', " +
-                        "'" + storageTable.getTableName() + "', " +
                         "'iceberg_view', " +
                         "'hive_table', " +
                         "'hive_view'");
@@ -133,8 +128,6 @@ public class TestIcebergMetadataListing
                         "('iceberg_table2', '_double'), " +
                         "('iceberg_materialized_view', '_string'), " +
                         "('iceberg_materialized_view', '_integer'), " +
-                        "('" + storageTable.getTableName() + "', '_string'), " +
-                        "('" + storageTable.getTableName() + "', '_integer'), " +
                         "('iceberg_view', '_string'), " +
                         "('iceberg_view', '_integer'), " +
                         "('hive_view', '_double')");

@@ -49,13 +49,15 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.linkedin.coral.trino.rel2trino.functions.TrinoKeywordsConverter.quoteWordIfNotQuoted;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_INVALID_VIEW_DATA;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_VIEW_TRANSLATION_ERROR;
-import static io.trino.plugin.hive.HiveMetadata.TABLE_COMMENT;
 import static io.trino.plugin.hive.HiveSessionProperties.isHiveViewsLegacyTranslation;
 import static io.trino.plugin.hive.HiveStorageFormat.TEXTFILE;
 import static io.trino.plugin.hive.HiveType.toHiveType;
 import static io.trino.plugin.hive.TableType.EXTERNAL_TABLE;
 import static io.trino.plugin.hive.TableType.VIRTUAL_VIEW;
 import static io.trino.plugin.hive.metastore.StorageFormat.fromHiveStorageFormat;
+import static io.trino.plugin.hive.metastore.Table.TABLE_COMMENT;
+import static io.trino.plugin.hive.metastore.TableInfo.ICEBERG_MATERIALIZED_VIEW_COMMENT;
+import static io.trino.plugin.hive.metastore.TableInfo.PRESTO_VIEW_COMMENT;
 import static io.trino.plugin.hive.metastore.thrift.ThriftMetastoreUtil.toMetastoreApiTable;
 import static io.trino.plugin.hive.util.HiveUtil.checkCondition;
 import static java.lang.String.format;
@@ -108,7 +110,7 @@ public final class ViewReaderUtil
                             format("%s is redirected to %s, but that relation cannot be found", schemaTableName, target)));
             List<Column> columns = tableSchema.getColumns().stream()
                     .filter(columnSchema -> !columnSchema.isHidden())
-                    .map(columnSchema -> new Column(columnSchema.getName(), toHiveType(columnSchema.getType()), Optional.empty() /* comment */))
+                    .map(columnSchema -> new Column(columnSchema.getName(), toHiveType(columnSchema.getType()), Optional.empty() /* comment */, Map.of()))
                     .collect(toImmutableList());
             Table table = Table.builder()
                     .setDatabaseName(schemaTableName.getSchemaName())
@@ -123,12 +125,23 @@ public final class ViewReaderUtil
         });
     }
 
-    public static final String ICEBERG_MATERIALIZED_VIEW_COMMENT = "Presto Materialized View";
     public static final String PRESTO_VIEW_FLAG = "presto_view";
     static final String VIEW_PREFIX = "/* Presto View: ";
     static final String VIEW_SUFFIX = " */";
     private static final JsonCodec<ConnectorViewDefinition> VIEW_CODEC =
             new JsonCodecFactory(new ObjectMapperProvider()).jsonCodec(ConnectorViewDefinition.class);
+
+    /**
+     * Returns true if table represents a Hive view, Trino/Presto view, materialized view or anything
+     * else that gets registered using table type "VIRTUAL_VIEW".
+     * Note: this method returns false for a table that represents Hive's own materialized view
+     * ("MATERIALIZED_VIEW" table type). Hive own's materialized views are currently treated as ordinary
+     * tables by Trino.
+     */
+    public static boolean isSomeKindOfAView(Table table)
+    {
+        return table.getTableType().equals(VIRTUAL_VIEW.name());
+    }
 
     public static boolean isPrestoView(Table table)
     {
@@ -139,6 +152,28 @@ public final class ViewReaderUtil
     {
         // TODO isPrestoView should not return true for materialized views
         return "true".equals(tableParameters.get(PRESTO_VIEW_FLAG));
+    }
+
+    /**
+     * Returns true when the table represents a "Trino view" (AKA "presto view").
+     * Returns false for Hive views or Trino materialized views.
+     */
+    public static boolean isTrinoView(Table table)
+    {
+        return isTrinoView(table.getTableType(), table.getParameters());
+    }
+
+     /**
+     * Returns true when the table represents a "Trino view" (AKA "presto view").
+     * Returns false for Hive views or Trino materialized views.
+     */
+    public static boolean isTrinoView(String tableType, Map<String, String> tableParameters)
+    {
+        // A Trino view can be recognized by table type "VIRTUAL_VIEW" and table parameters presto_view="true" and comment="Presto View" since their first implementation see
+        // https://github.com/trinodb/trino/blame/38bd0dff736024f3ae01dbbe7d1db5bd1d50c43e/presto-hive/src/main/java/com/facebook/presto/hive/HiveMetadata.java#L902.
+        return tableType.equals(VIRTUAL_VIEW.name()) &&
+                "true".equals(tableParameters.get(PRESTO_VIEW_FLAG)) &&
+                PRESTO_VIEW_COMMENT.equalsIgnoreCase(tableParameters.get(TABLE_COMMENT));
     }
 
     public static boolean isHiveOrPrestoView(Table table)

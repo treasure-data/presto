@@ -13,17 +13,15 @@
  */
 package io.trino.plugin.hive.metastore.file;
 
-import com.google.common.collect.ImmutableSet;
-import io.trino.hdfs.DynamicHdfsConfiguration;
-import io.trino.hdfs.HdfsConfig;
-import io.trino.hdfs.HdfsConfiguration;
-import io.trino.hdfs.HdfsConfigurationInitializer;
-import io.trino.hdfs.HdfsEnvironment;
-import io.trino.hdfs.authentication.NoHdfsAuthentication;
+import io.trino.filesystem.Location;
+import io.trino.filesystem.TrinoFileSystemFactory;
+import io.trino.filesystem.local.LocalFileSystemFactory;
 import io.trino.plugin.hive.NodeVersion;
 import io.trino.plugin.hive.metastore.HiveMetastoreConfig;
 
 import java.io.File;
+
+import static com.google.common.base.Verify.verify;
 
 public final class TestingFileHiveMetastore
 {
@@ -31,15 +29,22 @@ public final class TestingFileHiveMetastore
 
     public static FileHiveMetastore createTestingFileHiveMetastore(File catalogDirectory)
     {
-        HdfsConfig hdfsConfig = new HdfsConfig();
-        HdfsConfiguration hdfsConfiguration = new DynamicHdfsConfiguration(new HdfsConfigurationInitializer(hdfsConfig), ImmutableSet.of());
-        HdfsEnvironment hdfsEnvironment = new HdfsEnvironment(hdfsConfiguration, hdfsConfig, new NoHdfsAuthentication());
+        if (!catalogDirectory.exists()) {
+            verify(catalogDirectory.mkdirs());
+        }
+        return createTestingFileHiveMetastore(
+                new LocalFileSystemFactory(catalogDirectory.toPath()),
+                Location.of("local:///"));
+    }
+
+    public static FileHiveMetastore createTestingFileHiveMetastore(TrinoFileSystemFactory fileSystemFactory, Location catalogDirectory)
+    {
         return new FileHiveMetastore(
                 new NodeVersion("testversion"),
-                hdfsEnvironment,
+                fileSystemFactory,
                 new HiveMetastoreConfig().isHideDeltaLakeTables(),
                 new FileHiveMetastoreConfig()
-                        .setCatalogDirectory(catalogDirectory.toURI().toString())
+                        .setCatalogDirectory(catalogDirectory.toString())
                         .setMetastoreUser("test"));
     }
 }

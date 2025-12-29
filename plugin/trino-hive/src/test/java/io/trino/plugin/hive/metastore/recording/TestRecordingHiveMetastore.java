@@ -41,10 +41,12 @@ import io.trino.plugin.hive.metastore.SortingColumn.Order;
 import io.trino.plugin.hive.metastore.Storage;
 import io.trino.plugin.hive.metastore.StorageFormat;
 import io.trino.plugin.hive.metastore.Table;
+import io.trino.plugin.hive.metastore.TableInfo;
 import io.trino.plugin.hive.metastore.UnimplementedHiveMetastore;
 import io.trino.plugin.hive.util.HiveBlockEncodingSerde;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.TestingBlockJsonSerde;
+import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.security.RoleGrant;
@@ -58,12 +60,12 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalDouble;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import static io.trino.plugin.hive.HiveBasicStatistics.createEmptyStatistics;
-import static io.trino.plugin.hive.util.HiveBucketing.BucketingVersion.BUCKETING_V1;
 import static io.trino.spi.security.PrincipalType.USER;
 import static io.trino.spi.type.VarcharType.createUnboundedVarcharType;
 import static org.testng.Assert.assertEquals;
@@ -84,7 +86,7 @@ public class TestRecordingHiveMetastore
     private static final Storage TABLE_STORAGE = new Storage(
             StorageFormat.create("serde", "input", "output"),
             Optional.of("location"),
-            Optional.of(new HiveBucketProperty(ImmutableList.of("column"), BUCKETING_V1, 10, ImmutableList.of(new SortingColumn("column", Order.ASCENDING)))),
+            Optional.of(new HiveBucketProperty(ImmutableList.of("column"), 10, ImmutableList.of(new SortingColumn("column", Order.ASCENDING)))),
             true,
             ImmutableMap.of("param", "value2"));
     private static final Table TABLE = new Table(
@@ -124,9 +126,9 @@ public class TestRecordingHiveMetastore
                     Optional.empty(),
                     Optional.empty(),
                     OptionalLong.of(1234),
+                    OptionalDouble.of(1235),
                     OptionalLong.of(1235),
-                    OptionalLong.of(1),
-                    OptionalLong.of(8))));
+                    OptionalLong.of(1))));
     private static final HivePrivilegeInfo PRIVILEGE_INFO = new HivePrivilegeInfo(HivePrivilege.SELECT, true, new HivePrincipal(USER, "grantor"), new HivePrincipal(USER, "grantee"));
     private static final RoleGrant ROLE_GRANT = new RoleGrant(new TrinoPrincipal(USER, "grantee"), "role", true);
     private static final List<String> PARTITION_COLUMN_NAMES = ImmutableList.of(TABLE_COLUMN.getName());
@@ -175,13 +177,7 @@ public class TestRecordingHiveMetastore
         assertEquals(hiveMetastore.getDatabase("database"), Optional.of(DATABASE));
         assertEquals(hiveMetastore.getAllDatabases(), ImmutableList.of("database"));
         assertEquals(hiveMetastore.getTable("database", "table"), Optional.of(TABLE));
-        assertEquals(hiveMetastore.getTableStatistics(TABLE), PARTITION_STATISTICS);
-        assertEquals(hiveMetastore.getPartitionStatistics(TABLE, ImmutableList.of(PARTITION, OTHER_PARTITION)), ImmutableMap.of(
-                "column=value", PARTITION_STATISTICS,
-                "column=other_value", PARTITION_STATISTICS));
-        assertEquals(hiveMetastore.getAllTables("database"), ImmutableList.of("table"));
-        assertEquals(hiveMetastore.getTablesWithParameter("database", "param", "value3"), ImmutableList.of("table"));
-        assertEquals(hiveMetastore.getAllViews("database"), ImmutableList.of());
+        assertEquals(hiveMetastore.getTables("database"), ImmutableList.of(new TableInfo(new SchemaTableName("database", "table"), TableInfo.ExtendedRelationType.TABLE)));
         assertEquals(hiveMetastore.getPartition(TABLE, ImmutableList.of("value")), Optional.of(PARTITION));
         assertEquals(hiveMetastore.getPartitionNamesByFilter("database", "table", PARTITION_COLUMN_NAMES, TupleDomain.all()), Optional.of(ImmutableList.of("value")));
         assertEquals(hiveMetastore.getPartitionNamesByFilter("database", "table", PARTITION_COLUMN_NAMES, TUPLE_DOMAIN), Optional.of(ImmutableList.of("value")));
@@ -191,13 +187,10 @@ public class TestRecordingHiveMetastore
         assertEquals(hiveMetastore.listTablePrivileges("database", "table", Optional.of("owner"), Optional.of(new HivePrincipal(USER, "user"))), ImmutableSet.of(PRIVILEGE_INFO));
         assertEquals(hiveMetastore.listRoles(), ImmutableSet.of("role"));
         assertEquals(hiveMetastore.listRoleGrants(new HivePrincipal(USER, "user")), ImmutableSet.of(ROLE_GRANT));
-        assertEquals(hiveMetastore.listGrantedPrincipals("role"), ImmutableSet.of(ROLE_GRANT));
     }
 
     private void validatePartitionSubset(HiveMetastore hiveMetastore)
     {
-        assertEquals(hiveMetastore.getPartitionStatistics(TABLE, ImmutableList.of(PARTITION)), ImmutableMap.of("column=value", PARTITION_STATISTICS));
-        assertEquals(hiveMetastore.getPartitionStatistics(TABLE, ImmutableList.of(OTHER_PARTITION)), ImmutableMap.of("column=other_value", PARTITION_STATISTICS));
         assertEquals(hiveMetastore.getPartitionsByNames(TABLE, ImmutableList.of("column=value")), ImmutableMap.of("column=value", Optional.of(PARTITION)));
         assertEquals(hiveMetastore.getPartitionsByNames(TABLE, ImmutableList.of("column=other_value")), ImmutableMap.of("column=other_value", Optional.of(OTHER_PARTITION)));
     }
@@ -232,6 +225,15 @@ public class TestRecordingHiveMetastore
         }
 
         @Override
+        public List<TableInfo> getTables(String databaseName)
+        {
+            if (databaseName.equals("database")) {
+                return List.of(new TableInfo(TABLE.getSchemaTableName(), TableInfo.ExtendedRelationType.TABLE));
+            }
+
+            return List.of();
+        }
+
         public PartitionStatistics getTableStatistics(Table table)
         {
             if (table.getDatabaseName().equals("database") && table.getTableName().equals("table")) {
@@ -241,7 +243,6 @@ public class TestRecordingHiveMetastore
             return new PartitionStatistics(createEmptyStatistics(), ImmutableMap.of());
         }
 
-        @Override
         public Map<String, PartitionStatistics> getPartitionStatistics(Table table, List<Partition> partitions)
         {
             ImmutableMap.Builder<String, PartitionStatistics> result = ImmutableMap.builder();
@@ -256,7 +257,6 @@ public class TestRecordingHiveMetastore
             return result.buildOrThrow();
         }
 
-        @Override
         public List<String> getAllTables(String databaseName)
         {
             if (databaseName.equals("database")) {
@@ -266,7 +266,6 @@ public class TestRecordingHiveMetastore
             return ImmutableList.of();
         }
 
-        @Override
         public List<String> getTablesWithParameter(String databaseName, String parameterKey, String parameterValue)
         {
             if (databaseName.equals("database") && parameterKey.equals("param") && parameterValue.equals("value3")) {
@@ -275,7 +274,6 @@ public class TestRecordingHiveMetastore
             return ImmutableList.of();
         }
 
-        @Override
         public List<String> getAllViews(String databaseName)
         {
             return ImmutableList.of();
@@ -346,7 +344,6 @@ public class TestRecordingHiveMetastore
             return ImmutableSet.of("role");
         }
 
-        @Override
         public Set<RoleGrant> listGrantedPrincipals(String role)
         {
             return ImmutableSet.of(ROLE_GRANT);

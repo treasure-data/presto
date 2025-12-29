@@ -19,17 +19,22 @@ import io.trino.filesystem.Location;
 import io.trino.plugin.iceberg.BaseIcebergConnectorSmokeTest;
 import io.trino.plugin.iceberg.IcebergConfig;
 import io.trino.plugin.iceberg.IcebergQueryRunner;
+import io.trino.testing.QueryFailedException;
 import io.trino.testing.QueryRunner;
 import io.trino.testing.TestingConnectorBehavior;
 import org.apache.iceberg.BaseTable;
-import org.apache.iceberg.catalog.Catalog;
+import org.apache.iceberg.Schema;
+import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.jdbc.JdbcCatalog;
 import org.apache.iceberg.rest.DelegatingRestSessionCatalog;
+import org.apache.iceberg.types.Types;
 import org.assertj.core.util.Files;
 import org.testng.annotations.AfterClass;
+import org.testng.annotations.Test;
 
-import java.io.File;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.Optional;
 
@@ -38,15 +43,18 @@ import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static io.trino.plugin.iceberg.IcebergTestUtils.checkOrcFileSorting;
 import static io.trino.plugin.iceberg.IcebergTestUtils.checkParquetFileSorting;
 import static io.trino.plugin.iceberg.catalog.rest.RestCatalogTestUtils.backendCatalog;
+import static io.trino.testing.TestingNames.randomNameSuffix;
 import static java.lang.String.format;
 import static org.apache.iceberg.FileFormat.PARQUET;
+import static org.apache.iceberg.types.Types.NestedField.required;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class TestIcebergTrinoRestCatalogConnectorSmokeTest
         extends BaseIcebergConnectorSmokeTest
 {
-    private File warehouseLocation;
-    private Catalog backend;
+    private Path warehouseLocation;
+    private JdbcCatalog backend;
 
     public TestIcebergTrinoRestCatalogConnectorSmokeTest()
     {
@@ -58,9 +66,9 @@ public class TestIcebergTrinoRestCatalogConnectorSmokeTest
     protected boolean hasBehavior(TestingConnectorBehavior connectorBehavior)
     {
         return switch (connectorBehavior) {
-            case SUPPORTS_RENAME_SCHEMA -> false;
-            case SUPPORTS_CREATE_VIEW, SUPPORTS_COMMENT_ON_VIEW, SUPPORTS_COMMENT_ON_VIEW_COLUMN -> false;
-            case SUPPORTS_CREATE_MATERIALIZED_VIEW, SUPPORTS_RENAME_MATERIALIZED_VIEW -> false;
+            case SUPPORTS_CREATE_MATERIALIZED_VIEW,
+                SUPPORTS_RENAME_MATERIALIZED_VIEW,
+                SUPPORTS_RENAME_SCHEMA -> false;
             default -> super.hasBehavior(connectorBehavior);
         };
     }
@@ -69,8 +77,8 @@ public class TestIcebergTrinoRestCatalogConnectorSmokeTest
     protected QueryRunner createQueryRunner()
             throws Exception
     {
-        warehouseLocation = Files.newTemporaryFolder();
-        closeAfterClass(() -> deleteRecursively(warehouseLocation.toPath(), ALLOW_INSECURE));
+        warehouseLocation = Files.newTemporaryFolder().toPath();
+        closeAfterClass(() -> deleteRecursively(warehouseLocation, ALLOW_INSECURE));
 
         backend = closeAfterClass((JdbcCatalog) backendCatalog(warehouseLocation));
 
@@ -83,7 +91,7 @@ public class TestIcebergTrinoRestCatalogConnectorSmokeTest
         closeAfterClass(testServer::stop);
 
         return IcebergQueryRunner.builder()
-                .setBaseDataDir(Optional.of(warehouseLocation.toPath()))
+                .setBaseDataDir(Optional.of(warehouseLocation))
                 .setIcebergProperties(
                         ImmutableMap.<String, String>builder()
                                 .put("iceberg.file-format", format.name())
@@ -91,6 +99,7 @@ public class TestIcebergTrinoRestCatalogConnectorSmokeTest
                                 .put("iceberg.rest-catalog.uri", testServer.getBaseUrl().toString())
                                 .put("iceberg.register-table-procedure.enabled", "true")
                                 .put("iceberg.writer-sort-buffer-size", "1MB")
+                                .put("iceberg.allowed-extra-properties", "write.metadata.delete-after-commit.enabled,write.metadata.previous-versions-max")
                                 .buildOrThrow())
                 .setInitialTables(REQUIRED_TPCH_TABLES)
                 .build();
@@ -102,13 +111,69 @@ public class TestIcebergTrinoRestCatalogConnectorSmokeTest
         backend = null; // closed by closeAfterClass
     }
 
-    @Override
-    public void testView()
+    @Test
+    public void testDropSchemaCascadeWithViews()
     {
-        assertThatThrownBy(super::testView)
-                .hasMessageContaining("createView is not supported for Iceberg REST catalog");
+        String schemaName = "test_drop_schema_cascade" + randomNameSuffix();
+
+        assertUpdate("CREATE SCHEMA " + schemaName);
+
+        TableIdentifier sparkViewIdentifier = TableIdentifier.of(schemaName, "test_spark_views" + randomNameSuffix());
+        backend.buildView(sparkViewIdentifier)
+                .withDefaultNamespace(Namespace.of(schemaName))
+                .withDefaultCatalog("iceberg")
+                .withQuery("spark", "SELECT 1 x")
+                .withSchema(new Schema(required(1, "x", Types.LongType.get())))
+                .create();
+
+        TableIdentifier trinoViewIdentifier = TableIdentifier.of(schemaName, "test_trino_views" + randomNameSuffix());
+        backend.buildView(trinoViewIdentifier)
+                .withDefaultNamespace(Namespace.of(schemaName))
+                .withDefaultCatalog("iceberg")
+                .withQuery("trino", "SELECT 1 x")
+                .withSchema(new Schema(required(1, "x", Types.LongType.get())))
+                .create();
+
+        assertThat(backend.viewExists(sparkViewIdentifier)).isTrue();
+        assertThat(backend.viewExists(trinoViewIdentifier)).isTrue();
+
+        assertUpdate("DROP SCHEMA " + schemaName + " CASCADE");
+
+        assertThat(backend.viewExists(sparkViewIdentifier)).isFalse();
+        assertThat(backend.viewExists(trinoViewIdentifier)).isFalse();
     }
 
+    @Test
+    public void testUnsupportedViewDialect()
+    {
+        String viewName = "test_unsupported_dialect" + randomNameSuffix();
+        TableIdentifier identifier = TableIdentifier.of("tpch", viewName);
+
+        backend.buildView(identifier)
+                .withDefaultNamespace(Namespace.of("tpch"))
+                .withDefaultCatalog("iceberg")
+                .withQuery("spark", "SELECT 1 x")
+                .withSchema(new Schema(required(1, "x", Types.LongType.get())))
+                .create();
+
+        assertThat(computeActual("SHOW TABLES FROM iceberg.tpch").getOnlyColumnAsSet())
+                .contains(viewName);
+
+        assertThat(computeActual("SELECT table_name FROM information_schema.views WHERE table_schema = 'tpch'").getOnlyColumnAsSet())
+                .doesNotContain(viewName);
+
+        assertThat(computeActual("SELECT table_name FROM information_schema.columns WHERE table_schema = 'tpch'").getOnlyColumnAsSet())
+                .doesNotContain(viewName);
+
+        assertQueryReturnsEmptyResult("SELECT * FROM information_schema.columns WHERE table_schema = 'tpch' AND table_name = '" + viewName + "'");
+
+        // no isView function to check view existence in Iceberg REST catalog in 423
+        //assertQueryFails("SELECT * FROM " + viewName, "Cannot read unsupported dialect 'spark' for view '.*'");
+
+        backend.dropView(identifier);
+    }
+
+    @Test
     @Override
     public void testMaterializedView()
     {
@@ -116,6 +181,7 @@ public class TestIcebergTrinoRestCatalogConnectorSmokeTest
                 .hasMessageContaining("createMaterializedView is not supported for Iceberg REST catalog");
     }
 
+    @Test
     @Override
     public void testRenameSchema()
     {
@@ -126,7 +192,7 @@ public class TestIcebergTrinoRestCatalogConnectorSmokeTest
     @Override
     protected void dropTableFromMetastore(String tableName)
     {
-        // used when registering a table, which is not supported by the REST catalog
+        backend.dropTable(toIdentifier(tableName), false);
     }
 
     @Override
@@ -148,83 +214,7 @@ public class TestIcebergTrinoRestCatalogConnectorSmokeTest
         return java.nio.file.Files.exists(Path.of(location));
     }
 
-    @Override
-    public void testRegisterTableWithTableLocation()
-    {
-        assertThatThrownBy(super::testRegisterTableWithTableLocation)
-                .hasMessageContaining("registerTable is not supported for Iceberg REST catalog");
-    }
-
-    @Override
-    public void testRegisterTableWithComments()
-    {
-        assertThatThrownBy(super::testRegisterTableWithComments)
-                .hasMessageContaining("registerTable is not supported for Iceberg REST catalog");
-    }
-
-    @Override
-    public void testRegisterTableWithShowCreateTable()
-    {
-        assertThatThrownBy(super::testRegisterTableWithShowCreateTable)
-                .hasMessageContaining("registerTable is not supported for Iceberg REST catalog");
-    }
-
-    @Override
-    public void testRegisterTableWithReInsert()
-    {
-        assertThatThrownBy(super::testRegisterTableWithReInsert)
-                .hasMessageContaining("registerTable is not supported for Iceberg REST catalog");
-    }
-
-    @Override
-    public void testRegisterTableWithDifferentTableName()
-    {
-        assertThatThrownBy(super::testRegisterTableWithDifferentTableName)
-                .hasMessageContaining("registerTable is not supported for Iceberg REST catalog");
-    }
-
-    @Override
-    public void testRegisterTableWithMetadataFile()
-    {
-        assertThatThrownBy(super::testRegisterTableWithMetadataFile)
-                .hasMessageContaining("registerTable is not supported for Iceberg REST catalog");
-    }
-
-    @Override
-    public void testRegisterTableWithTrailingSpaceInLocation()
-    {
-        assertThatThrownBy(super::testRegisterTableWithTrailingSpaceInLocation)
-                .hasMessageContaining("registerTable is not supported for Iceberg REST catalog");
-    }
-
-    @Override
-    public void testUnregisterTable()
-    {
-        assertThatThrownBy(super::testUnregisterTable)
-                .hasMessageContaining("unregisterTable is not supported for Iceberg REST catalogs");
-    }
-
-    @Override
-    public void testUnregisterBrokenTable()
-    {
-        assertThatThrownBy(super::testUnregisterBrokenTable)
-                .hasMessageContaining("unregisterTable is not supported for Iceberg REST catalogs");
-    }
-
-    @Override
-    public void testUnregisterTableNotExistingTable()
-    {
-        assertThatThrownBy(super::testUnregisterTableNotExistingTable)
-                .hasMessageContaining("unregisterTable is not supported for Iceberg REST catalogs");
-    }
-
-    @Override
-    public void testRepeatUnregisterTable()
-    {
-        assertThatThrownBy(super::testRepeatUnregisterTable)
-                .hasMessageContaining("unregisterTable is not supported for Iceberg REST catalogs");
-    }
-
+    @Test
     @Override
     public void testDropTableWithMissingMetadataFile()
     {
@@ -232,27 +222,27 @@ public class TestIcebergTrinoRestCatalogConnectorSmokeTest
                 .hasMessageMatching("Failed to load table: (.*)");
     }
 
+    @Test
     @Override
     public void testDropTableWithMissingSnapshotFile()
     {
         assertThatThrownBy(super::testDropTableWithMissingSnapshotFile)
+                .isInstanceOf(QueryFailedException.class)
+                .cause()
+                .hasMessageContaining("Failed to drop table")
+                .cause()
                 .hasMessageMatching("Server error: NotFoundException: Failed to open input stream for file: (.*)");
     }
 
+    @Test
     @Override
     public void testDropTableWithMissingManifestListFile()
     {
         assertThatThrownBy(super::testDropTableWithMissingManifestListFile)
-                .hasMessageContaining("Table location should not exist expected [false] but found [true]");
+                .hasMessageContaining("Table location should not exist");
     }
 
-    @Override
-    public void testDropTableWithMissingDataFile()
-    {
-        assertThatThrownBy(super::testDropTableWithMissingDataFile)
-                .hasMessageContaining("Table location should not exist expected [false] but found [true]");
-    }
-
+    @Test
     @Override
     public void testDropTableWithNonExistentTableLocation()
     {
@@ -272,7 +262,12 @@ public class TestIcebergTrinoRestCatalogConnectorSmokeTest
     @Override
     protected void deleteDirectory(String location)
     {
-        // used when unregistering a table, which is not supported by the REST catalog
+        try {
+            deleteRecursively(Path.of(location), ALLOW_INSECURE);
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     private TableIdentifier toIdentifier(String tableName)

@@ -13,7 +13,7 @@
  */
 package io.trino.filesystem.s3;
 
-import io.trino.filesystem.s3.S3FileSystemConfig.S3SseType;
+import io.trino.filesystem.encryption.EncryptionKey;
 import io.trino.memory.context.AggregatedMemoryContext;
 import io.trino.memory.context.LocalMemoryContext;
 import software.amazon.awssdk.core.exception.SdkException;
@@ -23,8 +23,11 @@ import software.amazon.awssdk.services.s3.model.AbortMultipartUploadRequest;
 import software.amazon.awssdk.services.s3.model.CompleteMultipartUploadRequest;
 import software.amazon.awssdk.services.s3.model.CompletedPart;
 import software.amazon.awssdk.services.s3.model.CreateMultipartUploadRequest;
+import software.amazon.awssdk.services.s3.model.ObjectCannedACL;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.RequestPayer;
+import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.services.s3.model.StorageClass;
 import software.amazon.awssdk.services.s3.model.UploadPartRequest;
 import software.amazon.awssdk.services.s3.model.UploadPartResponse;
 
@@ -32,33 +35,44 @@ import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.file.FileAlreadyExistsException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
 
-import static com.google.common.primitives.Ints.constrainToRange;
+import static com.google.common.base.Verify.verify;
+import static io.trino.filesystem.s3.S3FileSystemConfig.ObjectCannedAcl.getCannedAcl;
+import static io.trino.filesystem.s3.S3FileSystemConfig.S3SseType.NONE;
+import static io.trino.filesystem.s3.S3FileSystemConfig.StorageClassType.toStorageClass;
+import static io.trino.filesystem.s3.S3SseCUtils.encoded;
+import static io.trino.filesystem.s3.S3SseCUtils.md5Checksum;
+import static io.trino.filesystem.s3.S3SseRequestConfigurator.setEncryptionSettings;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 import static java.lang.System.arraycopy;
+import static java.net.HttpURLConnection.HTTP_PRECON_FAILED;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.CompletableFuture.supplyAsync;
-import static software.amazon.awssdk.services.s3.model.ServerSideEncryption.AES256;
-import static software.amazon.awssdk.services.s3.model.ServerSideEncryption.AWS_KMS;
 
 final class S3OutputStream
         extends OutputStream
 {
     private final List<CompletedPart> parts = new ArrayList<>();
     private final LocalMemoryContext memoryContext;
+    private final Executor uploadExecutor;
     private final S3Client client;
     private final S3Location location;
+    private final S3Context context;
     private final int partSize;
     private final RequestPayer requestPayer;
-    private final S3SseType sseType;
-    private final String sseKmsKeyId;
+    private final StorageClass storageClass;
+    private final ObjectCannedACL cannedAcl;
+    private final boolean exclusiveCreate;
+    private final Optional<EncryptionKey> key;
 
     private int currentPartNumber;
     private byte[] buffer = new byte[0];
@@ -75,15 +89,21 @@ final class S3OutputStream
     // Visibility is ensured by calling get() on inProgressUploadFuture.
     private Optional<String> uploadId = Optional.empty();
 
-    public S3OutputStream(AggregatedMemoryContext memoryContext, S3Client client, S3Context context, S3Location location)
+    public S3OutputStream(AggregatedMemoryContext memoryContext, Executor uploadExecutor, S3Client client, S3Context context, S3Location location, boolean exclusiveCreate, Optional<EncryptionKey> key)
     {
         this.memoryContext = memoryContext.newLocalMemoryContext(S3OutputStream.class.getSimpleName());
+        this.uploadExecutor = requireNonNull(uploadExecutor, "uploadExecutor is null");
         this.client = requireNonNull(client, "client is null");
         this.location = requireNonNull(location, "location is null");
+        this.exclusiveCreate = exclusiveCreate;
+        this.context = requireNonNull(context, "context is null");
         this.partSize = context.partSize();
         this.requestPayer = context.requestPayer();
-        this.sseType = context.sseType();
-        this.sseKmsKeyId = context.sseKmsKeyId();
+        this.storageClass = toStorageClass(context.storageClass());
+        this.cannedAcl = getCannedAcl(context.cannedAcl());
+        this.key = requireNonNull(key, "key is null");
+
+        verify(key.isEmpty() || context.s3SseContext().sseType() == NONE, "Encryption key cannot be used with SSE configuration");
     }
 
     @SuppressWarnings("NumericCastThatLosesPrecision")
@@ -179,7 +199,7 @@ final class S3OutputStream
             int target = max(buffer.length, initialBufferSize);
             if (target < capacity) {
                 target += target / 2; // increase 50%
-                target = constrainToRange(target, capacity, partSize);
+                target = clamp(target, capacity, partSize);
             }
             buffer = Arrays.copyOf(buffer, target);
             memoryContext.setBytes(buffer.length);
@@ -192,16 +212,23 @@ final class S3OutputStream
         // skip multipart upload if there would only be one part
         if (finished && !multipartUploadStarted) {
             PutObjectRequest request = PutObjectRequest.builder()
+                    .overrideConfiguration(context::applyCredentialProviderOverride)
+                    .acl(cannedAcl)
                     .requestPayer(requestPayer)
                     .bucket(location.bucket())
                     .key(location.key())
+                    .storageClass(storageClass)
                     .contentLength((long) bufferSize)
                     .applyMutation(builder -> {
-                        switch (sseType) {
-                            case NONE -> { /* ignored */ }
-                            case S3 -> builder.serverSideEncryption(AES256);
-                            case KMS -> builder.serverSideEncryption(AWS_KMS).ssekmsKeyId(sseKmsKeyId);
-                        }
+                        //if (exclusiveCreate) {
+                        //    builder.ifNoneMatch("*");
+                        //}
+                        key.ifPresent(encryption -> {
+                            builder.sseCustomerKey(encoded(encryption));
+                            builder.sseCustomerAlgorithm(encryption.algorithm());
+                            builder.sseCustomerKeyMD5(md5Checksum(encryption));
+                        });
+                        setEncryptionSettings(builder, context.s3SseContext());
                     })
                     .build();
 
@@ -211,9 +238,17 @@ final class S3OutputStream
                 client.putObject(request, RequestBody.fromByteBuffer(bytes));
                 return;
             }
+            catch (S3Exception e) {
+                failed = true;
+                // when `location` already exists, the operation will fail with `412 Precondition Failed`
+                if (e.statusCode() == HTTP_PRECON_FAILED) {
+                    throw new FileAlreadyExistsException(location.toString());
+                }
+                throw new IOException("Put failed for bucket [%s] key [%s]: %s".formatted(location.bucket(), location.key(), e), e);
+            }
             catch (SdkException e) {
                 failed = true;
-                throw new IOException(e);
+                throw new IOException("Put failed for bucket [%s] key [%s]: %s".formatted(location.bucket(), location.key(), e), e);
             }
         }
 
@@ -241,7 +276,7 @@ final class S3OutputStream
                 throw e;
             }
             multipartUploadStarted = true;
-            inProgressUploadFuture = supplyAsync(() -> uploadPage(data, length));
+            inProgressUploadFuture = supplyAsync(() -> uploadPage(data, length), uploadExecutor);
         }
     }
 
@@ -268,16 +303,19 @@ final class S3OutputStream
     {
         if (uploadId.isEmpty()) {
             CreateMultipartUploadRequest request = CreateMultipartUploadRequest.builder()
+                    .overrideConfiguration(context::applyCredentialProviderOverride)
+                    .acl(cannedAcl)
                     .requestPayer(requestPayer)
                     .bucket(location.bucket())
                     .key(location.key())
-                    .applyMutation(builder -> {
-                        switch (sseType) {
-                            case NONE -> { /* ignored */ }
-                            case S3 -> builder.serverSideEncryption(AES256);
-                            case KMS -> builder.serverSideEncryption(AWS_KMS).ssekmsKeyId(sseKmsKeyId);
-                        }
-                    })
+                    .storageClass(storageClass)
+                    .applyMutation(builder ->
+                        key.ifPresentOrElse(
+                                encryption ->
+                                    builder.sseCustomerKey(encoded(encryption))
+                                            .sseCustomerAlgorithm(encryption.algorithm())
+                                            .sseCustomerKeyMD5(md5Checksum(encryption)),
+                                    () -> setEncryptionSettings(builder, context.s3SseContext())))
                     .build();
 
             uploadId = Optional.of(client.createMultipartUpload(request).uploadId());
@@ -285,12 +323,20 @@ final class S3OutputStream
 
         currentPartNumber++;
         UploadPartRequest request = UploadPartRequest.builder()
+                .overrideConfiguration(context::applyCredentialProviderOverride)
                 .requestPayer(requestPayer)
                 .bucket(location.bucket())
                 .key(location.key())
                 .contentLength((long) length)
                 .uploadId(uploadId.get())
                 .partNumber(currentPartNumber)
+                .applyMutation(builder ->
+                    key.ifPresentOrElse(
+                            encryption ->
+                                builder.sseCustomerKey(encoded(encryption))
+                                        .sseCustomerAlgorithm(encryption.algorithm())
+                                        .sseCustomerKeyMD5(md5Checksum(encryption)),
+                            () -> setEncryptionSettings(builder, context.s3SseContext())))
                 .build();
 
         ByteBuffer bytes = ByteBuffer.wrap(data, 0, length);
@@ -309,11 +355,23 @@ final class S3OutputStream
     private void finishUpload(String uploadId)
     {
         CompleteMultipartUploadRequest request = CompleteMultipartUploadRequest.builder()
+                .overrideConfiguration(context::applyCredentialProviderOverride)
                 .requestPayer(requestPayer)
                 .bucket(location.bucket())
                 .key(location.key())
                 .uploadId(uploadId)
                 .multipartUpload(x -> x.parts(parts))
+                .applyMutation(builder -> {
+                    key.ifPresentOrElse(
+                            encryption ->
+                                    builder.sseCustomerKey(encoded(encryption))
+                                            .sseCustomerAlgorithm(encryption.algorithm())
+                                            .sseCustomerKeyMD5(md5Checksum(encryption)),
+                            () -> setEncryptionSettings(builder, context.s3SseContext()));
+                    //if (exclusiveCreate) {
+                    //    builder.ifNoneMatch("*");
+                    //}
+                })
                 .build();
 
         client.completeMultipartUpload(request);
@@ -322,6 +380,7 @@ final class S3OutputStream
     private void abortUpload()
     {
         uploadId.map(id -> AbortMultipartUploadRequest.builder()
+                        .overrideConfiguration(context::applyCredentialProviderOverride)
                         .requestPayer(requestPayer)
                         .bucket(location.bucket())
                         .key(location.key())
@@ -341,5 +400,13 @@ final class S3OutputStream
                 throwable.addSuppressed(t);
             }
         }
+    }
+
+    public static int clamp(long value, int min, int max)
+    {
+        if (min > max) {
+            throw new IllegalArgumentException(min + " > " + max);
+        }
+        return (int) Math.min(max, Math.max(value, min));
     }
 }

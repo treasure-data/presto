@@ -15,6 +15,8 @@ package io.trino.spi.block;
 
 import jakarta.annotation.Nullable;
 
+import java.util.stream.Stream;
+
 import static java.util.Objects.requireNonNull;
 
 public final class ColumnarRow
@@ -42,13 +44,18 @@ public final class ColumnarRow
             throw new IllegalArgumentException("Invalid row block: " + block.getClass().getName());
         }
 
-        // get fields for visible region
-        int firstRowPosition = rowBlock.getFieldBlockOffset(0);
-        int totalRowCount = rowBlock.getFieldBlockOffset(block.getPositionCount()) - firstRowPosition;
-        Block[] fieldBlocks = new Block[rowBlock.numFields];
-        for (int i = 0; i < fieldBlocks.length; i++) {
-            fieldBlocks[i] = rowBlock.getRawFieldBlocks()[i].getRegion(firstRowPosition, totalRowCount);
+        int[] nonNullPositions = new int[rowBlock.getPositionCount()];
+        int idCount = 0;
+        for (int position = 0; position < nonNullPositions.length; position++) {
+            if (!rowBlock.isNull(position)) {
+                nonNullPositions[idCount] = position;
+                idCount++;
+            }
         }
+        int nonNullPositionCount = idCount;
+        Block[] fieldBlocks = Stream.of(rowBlock.getRawFieldBlocks())
+                .map(field -> DictionaryBlock.create(nonNullPositionCount, field, nonNullPositions))
+                .toArray(Block[]::new);
 
         return new ColumnarRow(block.getPositionCount(), block, fieldBlocks);
     }

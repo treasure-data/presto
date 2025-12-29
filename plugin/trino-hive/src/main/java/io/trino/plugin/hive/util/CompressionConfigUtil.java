@@ -48,7 +48,7 @@ public final class CompressionConfigUtil
         }
 
         // For Parquet
-        config.set(ParquetOutputFormat.COMPRESSION, compressionCodec.getParquetCompressionCodec().name());
+        compressionCodec.getParquetCompressionCodec().ifPresent(codec -> config.set(ParquetOutputFormat.COMPRESSION, codec.name()));
 
         // For Avro
         compressionCodec.getAvroCompressionKind().ifPresent(kind -> config.set(AvroJob.OUTPUT_CODEC, kind.toString()));

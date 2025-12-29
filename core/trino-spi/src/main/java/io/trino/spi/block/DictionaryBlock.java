@@ -25,6 +25,9 @@ import java.util.function.ObjLongConsumer;
 
 import static io.airlift.slice.SizeOf.instanceSize;
 import static io.airlift.slice.SizeOf.sizeOf;
+import static io.trino.spi.PageBlockUtil.getUnderlyingValueBlock;
+import static io.trino.spi.PageBlockUtil.getUnderlyingValuePosition;
+import static io.trino.spi.PageBlockUtil.isValueBlock;
 import static io.trino.spi.block.BlockUtil.checkArrayRange;
 import static io.trino.spi.block.BlockUtil.checkValidPosition;
 import static io.trino.spi.block.BlockUtil.checkValidPositions;
@@ -55,7 +58,7 @@ public class DictionaryBlock
 
     public static Block create(int positionCount, Block dictionary, int[] ids)
     {
-        return createInternal(positionCount, dictionary, ids, randomDictionaryId());
+        return createInternal(0, positionCount, dictionary, ids, randomDictionaryId());
     }
 
     /**
@@ -63,16 +66,16 @@ public class DictionaryBlock
      */
     public static Block createProjectedDictionaryBlock(int positionCount, Block dictionary, int[] ids, DictionaryId dictionarySourceId)
     {
-        return createInternal(positionCount, dictionary, ids, dictionarySourceId);
+        return createInternal(0, positionCount, dictionary, ids, dictionarySourceId);
     }
 
-    private static Block createInternal(int positionCount, Block dictionary, int[] ids, DictionaryId dictionarySourceId)
+    static Block createInternal(int idsOffset, int positionCount, Block dictionary, int[] ids, DictionaryId dictionarySourceId)
     {
         if (positionCount == 0) {
             return dictionary.copyRegion(0, 0);
         }
         if (positionCount == 1) {
-            return dictionary.getRegion(ids[0], 1);
+            return dictionary.getRegion(ids[idsOffset], 1);
         }
 
         // if dictionary is an RLE then this can just be a new RLE
@@ -80,17 +83,16 @@ public class DictionaryBlock
             return RunLengthEncodedBlock.create(rle.getValue(), positionCount);
         }
 
-        // unwrap dictionary in dictionary
-        if (dictionary instanceof DictionaryBlock dictionaryBlock) {
-            int[] newIds = new int[positionCount];
-            for (int position = 0; position < positionCount; position++) {
-                newIds[position] = dictionaryBlock.getId(ids[position]);
-            }
-            dictionary = dictionaryBlock.getDictionary();
-            dictionarySourceId = randomDictionaryId();
-            ids = newIds;
+        if (isValueBlock(dictionary)) {
+            return new DictionaryBlock(idsOffset, positionCount, dictionary, ids, false, false, dictionarySourceId);
         }
-        return new DictionaryBlock(0, positionCount, dictionary, ids, false, false, dictionarySourceId);
+
+        // unwrap dictionary in dictionary
+        int[] newIds = new int[positionCount];
+        for (int position = 0; position < positionCount; position++) {
+            newIds[position] = getUnderlyingValuePosition(dictionary, ids[idsOffset + position]);
+        }
+        return new DictionaryBlock(0, positionCount, getUnderlyingValueBlock(dictionary), newIds, false, false, randomDictionaryId());
     }
 
     DictionaryBlock(int idsOffset, int positionCount, Block dictionary, int[] ids)
@@ -595,6 +597,34 @@ public class DictionaryBlock
     public Block getDictionary()
     {
         return dictionary;
+    }
+
+    public Block createProjection(Block newDictionary)
+    {
+        if (newDictionary.getPositionCount() != dictionary.getPositionCount()) {
+            throw new IllegalArgumentException("newDictionary must have the same position count");
+        }
+
+        // if the new dictionary is lazy be careful to not materialize it
+        if (newDictionary instanceof LazyBlock lazyBlock) {
+            return new LazyBlock(positionCount, () -> {
+                Block newDictionaryBlock = lazyBlock.getBlock();
+                return createProjection(newDictionaryBlock);
+            });
+        }
+        if (isValueBlock(newDictionary)) {
+            return new DictionaryBlock(idsOffset, positionCount, newDictionary, ids, isCompact(), false, dictionarySourceId);
+        }
+        if (newDictionary instanceof RunLengthEncodedBlock rle) {
+            return RunLengthEncodedBlock.create(rle.getValue(), positionCount);
+        }
+
+        // unwrap dictionary in dictionary
+        int[] newIds = new int[positionCount];
+        for (int position = 0; position < positionCount; position++) {
+            newIds[position] = getUnderlyingValuePosition(newDictionary, getIdUnchecked(position));
+        }
+        return new DictionaryBlock(0, positionCount, getUnderlyingValueBlock(newDictionary), newIds, false, false, randomDictionaryId());
     }
 
     Slice getIds()

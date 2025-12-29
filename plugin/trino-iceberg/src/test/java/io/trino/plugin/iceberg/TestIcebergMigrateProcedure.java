@@ -45,7 +45,7 @@ public class TestIcebergMigrateProcedure
     {
         dataDirectory = Files.createTempDirectory("_test_hidden");
         DistributedQueryRunner queryRunner = IcebergQueryRunner.builder().setMetastoreDirectory(dataDirectory.toFile()).build();
-        queryRunner.installPlugin(new TestingHivePlugin());
+        queryRunner.installPlugin(new TestingHivePlugin(Files.createTempDirectory(null)));
         queryRunner.createCatalog("hive", "hive", ImmutableMap.<String, String>builder()
                         .put("hive.metastore", "file")
                         .put("hive.metastore.catalog.dir", dataDirectory.toString())

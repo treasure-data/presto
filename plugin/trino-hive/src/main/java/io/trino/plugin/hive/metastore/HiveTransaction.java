@@ -14,7 +14,6 @@
 package io.trino.plugin.hive.metastore;
 
 import com.google.common.collect.ImmutableList;
-import io.trino.plugin.hive.HiveMetastoreClosure;
 import io.trino.plugin.hive.HivePartition;
 import io.trino.plugin.hive.HiveTableHandle;
 import io.trino.plugin.hive.acid.AcidTransaction;
@@ -62,7 +61,7 @@ public class HiveTransaction
 
     public ValidTxnWriteIdList getValidWriteIds(
             AcidTransactionOwner transactionOwner,
-            HiveMetastoreClosure metastore,
+            HiveMetastore metastore,
             HiveTableHandle tableHandle)
     {
         List<SchemaTableName> lockedTables;

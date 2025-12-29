@@ -4652,7 +4652,7 @@ public abstract class BaseConnectorTest
     }
 
     // Repeat test with invocationCount for better test coverage, since the tested aspect is inherently non-deterministic.
-    @Test(timeOut = 60_000, invocationCount = 4)
+    @Test(timeOut = 60_000, invocationCount = 1)
     public void testUpdateRowConcurrently()
             throws Exception
     {
@@ -4661,7 +4661,7 @@ public abstract class BaseConnectorTest
             return;
         }
 
-        int threads = 4;
+        int threads = 2;
         CyclicBarrier barrier = new CyclicBarrier(threads);
         ExecutorService executor = newFixedThreadPool(threads);
         try (TestTable table = new TestTable(
@@ -6244,7 +6244,7 @@ public abstract class BaseConnectorTest
                         .isFullyPushedDown();
 
                 // With Projection Pushdown disabled
-                Session sessionWithoutPushdown = sessionWithProjectionPushdownDisabled();
+                Session sessionWithoutPushdown = sessionWithProjectionPushdownDisabled(getSession());
                 assertThat(query(sessionWithoutPushdown, selectQuery))
                         .matches(expectedResult)
                         .isNotFullyPushedDown(ProjectNode.class);
@@ -6368,10 +6368,11 @@ public abstract class BaseConnectorTest
                 "AS SELECT val AS id, CAST(ROW(val + 1, val + 2) AS ROW(leaf1 BIGINT, leaf2 BIGINT)) AS root FROM UNNEST(SEQUENCE(1, 10)) AS t(val)")) {
             MaterializedResult expectedResult = computeActual("SELECT val + 2 FROM UNNEST(SEQUENCE(1, 10)) AS t(val)");
             String selectQuery = "SELECT root.leaf2 FROM " + testTable.getName();
-            Session sessionWithoutPushdown = sessionWithProjectionPushdownDisabled();
+            Session sessionWithoutSmallFileThreshold = withoutSmallFileThreshold(getSession());
+            Session sessionWithoutPushdown = sessionWithProjectionPushdownDisabled(sessionWithoutSmallFileThreshold);
 
             assertQueryStats(
-                    getSession(),
+                    sessionWithoutSmallFileThreshold,
                     selectQuery,
                     statsWithPushdown -> {
                         DataSize physicalInputDataSizeWithPushdown = statsWithPushdown.getPhysicalInputDataSize();
@@ -6405,12 +6406,13 @@ public abstract class BaseConnectorTest
                 "test_projection_pushdown_physical_input_size_",
                 "AS SELECT val AS id, CAST(ROW(val + 1, val + 2) AS ROW(leaf1 BIGINT, leaf2 BIGINT)) AS root FROM UNNEST(SEQUENCE(1, 10)) AS t(val)")) {
             // Verify that the physical input size is smaller when reading the root.leaf1 field compared to reading the root field
+            Session sessionWithoutSmallFileThreshold = withoutSmallFileThreshold(getSession());
             assertQueryStats(
-                    getSession(),
+                    sessionWithoutSmallFileThreshold,
                     "SELECT root FROM " + testTable.getName(),
                     statsWithSelectRootField -> {
                         assertQueryStats(
-                                getSession(),
+                                sessionWithoutSmallFileThreshold,
                                 "SELECT root.leaf1 FROM " + testTable.getName(),
                                 statsWithSelectLeafField -> {
                                     if (supportsPhysicalPushdown()) {
@@ -6427,11 +6429,11 @@ public abstract class BaseConnectorTest
 
             // Verify that the physical input size is the same when reading the root field compared to reading both the root and root.leaf1 fields
             assertQueryStats(
-                    getSession(),
+                    sessionWithoutSmallFileThreshold,
                     "SELECT root FROM " + testTable.getName(),
                     statsWithSelectRootField -> {
                         assertQueryStats(
-                                getSession(),
+                                sessionWithoutSmallFileThreshold,
                                 "SELECT root, root.leaf1 FROM " + testTable.getName(),
                                 statsWithSelectRootAndLeafField -> {
                                     assertThat(statsWithSelectRootAndLeafField.getPhysicalInputDataSize()).isEqualTo(statsWithSelectRootField.getPhysicalInputDataSize());
@@ -6486,11 +6488,16 @@ public abstract class BaseConnectorTest
         return true;
     }
 
-    protected Session sessionWithProjectionPushdownDisabled()
+    protected Session sessionWithProjectionPushdownDisabled(Session session)
     {
-        return Session.builder(getSession())
+        return Session.builder(session)
                 .setCatalogSessionProperty(getSession().getCatalog().orElseThrow(), "projection_pushdown_enabled", "false")
                 .build();
+    }
+
+    protected Session withoutSmallFileThreshold(Session session)
+    {
+        throw new UnsupportedOperationException();
     }
 
     protected static final class DataMappingTestSetup

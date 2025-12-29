@@ -2131,7 +2131,7 @@ public class TestExpressionCompiler
                     ('mBzobeIVrA','QLPvGtYprB','vBOLRnlaMN'),
                     ('yznCLJqmVK','WgoKkNdSLR','mwAoQsMjrt')
                 )""")
-                .binding("a", toLiteral(null, DOUBLE)))
+                .binding("a", toLiteral(null, VarcharType.createVarcharType(10))))
                 .isNull(BOOLEAN);
     }
 

@@ -65,8 +65,7 @@ public final class S3HudiQueryRunner
         HiveMetastore metastore = new BridgingHiveMetastore(
                 testingThriftHiveMetastoreBuilder()
                         .metastoreClient(hiveMinioDataLake.getHiveHadoop().getHiveMetastoreEndpoint())
-                        .hdfsEnvironment(hdfsEnvironment)
-                        .build());
+                        .build(x -> {}));
         Database database = Database.builder()
                 .setDatabaseName(TPCH_SCHEMA)
                 .setOwnerName(Optional.of("public"))

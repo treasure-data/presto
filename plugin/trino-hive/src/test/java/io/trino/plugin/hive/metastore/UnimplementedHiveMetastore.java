@@ -13,21 +13,18 @@
  */
 package io.trino.plugin.hive.metastore;
 
-import io.trino.plugin.hive.HiveColumnStatisticType;
+import com.google.common.collect.ImmutableSet;
 import io.trino.plugin.hive.HiveType;
 import io.trino.plugin.hive.PartitionStatistics;
-import io.trino.plugin.hive.acid.AcidTransaction;
 import io.trino.plugin.hive.metastore.HivePrivilegeInfo.HivePrivilege;
-import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.security.RoleGrant;
-import io.trino.spi.type.Type;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
-import java.util.function.Function;
 
 public class UnimplementedHiveMetastore
         implements HiveMetastore
@@ -51,64 +48,37 @@ public class UnimplementedHiveMetastore
     }
 
     @Override
-    public Set<HiveColumnStatisticType> getSupportedColumnStatistics(Type type)
+    public Map<String, HiveColumnStatistics> getTableColumnStatistics(String databaseName, String tableName, Set<String> columnNames)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public PartitionStatistics getTableStatistics(Table table)
+    public Map<String, Map<String, HiveColumnStatistics>> getPartitionColumnStatistics(String databaseName, String tableName, Set<String> partitionNames, Set<String> columnNames)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Map<String, PartitionStatistics> getPartitionStatistics(Table table, List<Partition> partitions)
+    public void updateTableStatistics(String databaseName, String tableName, OptionalLong acidWriteId, StatisticsUpdateMode mode, PartitionStatistics statisticsUpdate)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public void updateTableStatistics(String databaseName,
-            String tableName,
-            AcidTransaction transaction,
-            Function<PartitionStatistics, PartitionStatistics> update)
+    public void updatePartitionStatistics(Table table, StatisticsUpdateMode mode, Map<String, PartitionStatistics> partitionUpdates)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public void updatePartitionStatistics(Table table, Map<String, Function<PartitionStatistics, PartitionStatistics>> updates)
+    public List<TableInfo> getTables(String databaseName)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public List<String> getAllTables(String databaseName)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Optional<List<SchemaTableName>> getAllTables()
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public List<String> getTablesWithParameter(String databaseName, String parameterKey, String parameterValue)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public List<String> getAllViews(String databaseName)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Optional<List<SchemaTableName>> getAllViews()
+    public List<String> getTableNamesWithParameters(String databaseName, String parameterKey, ImmutableSet<String> parameterValues)
     {
         throw new UnsupportedOperationException();
     }
@@ -156,7 +126,7 @@ public class UnimplementedHiveMetastore
     }
 
     @Override
-    public void replaceTable(String databaseName, String tableName, Table newTable, PrincipalPrivileges principalPrivileges)
+    public void replaceTable(String databaseName, String tableName, Table newTable, PrincipalPrivileges principalPrivileges, Map<String, String> environmentContext)
     {
         throw new UnsupportedOperationException();
     }
@@ -280,12 +250,6 @@ public class UnimplementedHiveMetastore
 
     @Override
     public void revokeRoles(Set<String> roles, Set<HivePrincipal> grantees, boolean adminOption, HivePrincipal grantor)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Set<RoleGrant> listGrantedPrincipals(String role)
     {
         throw new UnsupportedOperationException();
     }

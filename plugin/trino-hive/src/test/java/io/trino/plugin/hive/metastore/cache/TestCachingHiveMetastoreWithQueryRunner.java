@@ -16,29 +16,27 @@ package io.trino.plugin.hive.metastore.cache;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.inject.Key;
 import io.trino.Session;
 import io.trino.plugin.hive.HiveQueryRunner;
-import io.trino.plugin.hive.metastore.file.FileHiveMetastore;
+import io.trino.plugin.hive.metastore.HiveMetastore;
+import io.trino.plugin.hive.metastore.HiveMetastoreFactory;
+import io.trino.plugin.hive.metastore.RawHiveMetastoreFactory;
 import io.trino.spi.security.Identity;
 import io.trino.spi.security.SelectedRole;
 import io.trino.testing.AbstractTestQueryFramework;
-import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.QueryRunner;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.Lists.cartesianProduct;
-import static com.google.common.io.MoreFiles.deleteRecursively;
-import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
-import static io.trino.plugin.hive.metastore.file.TestingFileHiveMetastore.createTestingFileHiveMetastore;
+import static io.trino.plugin.hive.TestingHiveUtils.getConnectorService;
 import static io.trino.spi.security.SelectedRole.Type.ROLE;
 import static io.trino.testing.TestingSession.testSessionBuilder;
-import static java.nio.file.Files.createTempDirectory;
 import static java.util.Collections.nCopies;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -54,27 +52,25 @@ public class TestCachingHiveMetastoreWithQueryRunner
     private static final String ALICE_NAME = "alice";
     private static final Session ALICE = getTestSession(new Identity.Builder(ALICE_NAME).build());
 
-    private FileHiveMetastore fileHiveMetastore;
+    private HiveMetastore fileHiveMetastore;
 
     @Override
     protected QueryRunner createQueryRunner()
             throws Exception
     {
-        Path temporaryMetastoreDirectory = createTempDirectory(null);
-        closeAfterClass(() -> deleteRecursively(temporaryMetastoreDirectory, ALLOW_INSECURE));
-
-        DistributedQueryRunner queryRunner = HiveQueryRunner.builder(ADMIN)
-                .setNodeCount(3)
+        QueryRunner queryRunner = HiveQueryRunner.builder(ADMIN)
                 // Required by testPartitionAppend test.
                 // Coordinator needs to be excluded from workers to deterministically reproduce the original problem
                 // https://github.com/trinodb/trino/pull/6853
                 .setCoordinatorProperties(ImmutableMap.of("node-scheduler.include-coordinator", "false"))
-                .setMetastore(distributedQueryRunner -> fileHiveMetastore = createTestingFileHiveMetastore(temporaryMetastoreDirectory.toFile()))
                 .setHiveProperties(ImmutableMap.of(
                         "hive.security", "sql-standard",
                         "hive.metastore-cache-ttl", "60m",
                         "hive.metastore-refresh-interval", "10m"))
                 .build();
+
+        fileHiveMetastore = getConnectorService(queryRunner, Key.get(HiveMetastoreFactory.class, RawHiveMetastoreFactory.class))
+                .createMetastore(Optional.empty());
 
         queryRunner.execute(ADMIN, "CREATE SCHEMA " + SCHEMA);
         queryRunner.execute("CREATE TABLE test (test INT)");

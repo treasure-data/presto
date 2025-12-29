@@ -15,11 +15,15 @@ package io.trino.plugin.hive;
 
 import io.trino.plugin.hive.containers.HiveHadoop;
 
+import static io.trino.testing.TestingNames.randomNameSuffix;
+
 public class TestHive2OnDataLake
         extends BaseTestHiveOnDataLake
 {
+    private static final String BUCKET_NAME = "test-hive-insert-overwrite-" + randomNameSuffix();
+
     public TestHive2OnDataLake()
     {
-        super(HiveHadoop.DEFAULT_IMAGE);
+        super(BUCKET_NAME, HiveHadoop.HIVE3_IMAGE);
     }
 }

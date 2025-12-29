@@ -13,14 +13,12 @@
  */
 package io.trino.plugin.deltalake.metastore.glue;
 
-import com.amazonaws.services.glue.model.Table;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
+import io.trino.plugin.hive.metastore.Table;
 import io.trino.plugin.hive.util.HiveUtil;
 
 import java.util.function.Predicate;
-
-import static io.trino.plugin.hive.metastore.glue.converter.GlueToTrinoConverter.getTableParameters;
 
 public class DeltaLakeGlueMetastoreTableFilterProvider
         implements Provider<Predicate<Table>>
@@ -37,7 +35,7 @@ public class DeltaLakeGlueMetastoreTableFilterProvider
     public Predicate<Table> get()
     {
         if (hideNonDeltaLakeTables) {
-            return table -> HiveUtil.isDeltaLakeTable(getTableParameters(table));
+            return table -> HiveUtil.isDeltaLakeTable(table);
         }
         return table -> true;
     }

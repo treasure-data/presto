@@ -96,9 +96,11 @@ public class IcebergOrcFileWriter
     }
 
     @Override
-    public Metrics getMetrics()
+    public FileMetrics getFileMetrics()
     {
-        return computeMetrics(metricsConfig, icebergSchema, orcColumns, orcWriter.getFileRowCount(), orcWriter.getFileStats());
+        return new FileMetrics(
+                computeMetrics(metricsConfig, icebergSchema, orcColumns, orcWriter.getFileRowCount(), orcWriter.getFileStats()),
+                Optional.empty());
     }
 
     private static Metrics computeMetrics(MetricsConfig metricsConfig, Schema icebergSchema, ColumnMetadata<OrcType> orcColumns, long fileRowCount, Optional<ColumnMetadata<ColumnStatistics>> columnStatistics)

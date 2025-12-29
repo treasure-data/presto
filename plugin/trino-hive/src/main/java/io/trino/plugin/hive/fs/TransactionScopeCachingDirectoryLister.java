@@ -157,10 +157,10 @@ public class TransactionScopeCachingDirectoryLister
         };
     }
 
-    @VisibleForTesting
-    boolean isCached(Location location)
+    @Override
+    public boolean isCached(Location location)
     {
-        return isCached(new TransactionDirectoryListingCacheKey(transactionId, location));
+        return isCached(new TransactionDirectoryListingCacheKey(transactionId, location)) || delegate.isCached(location);
     }
 
     @VisibleForTesting

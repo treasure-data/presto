@@ -25,7 +25,6 @@ import org.testng.annotations.AfterClass;
 
 import java.nio.file.Path;
 
-import static io.trino.plugin.hive.metastore.file.TestingFileHiveMetastore.createTestingFileHiveMetastore;
 import static io.trino.plugin.iceberg.IcebergQueryRunner.ICEBERG_CATALOG;
 import static io.trino.plugin.tpch.TpchMetadata.TINY_SCHEMA_NAME;
 import static io.trino.testing.QueryAssertions.copyTpchTables;
@@ -74,7 +73,7 @@ public class TestSharedHiveMetastore
                         "hive.metastore.catalog.dir", dataDirectory.toString(),
                         "iceberg.hive-catalog-name", "hive"));
 
-        queryRunner.installPlugin(new TestingHivePlugin(createTestingFileHiveMetastore(dataDirectory.toFile())));
+        queryRunner.installPlugin(new TestingHivePlugin(dataDirectory));
         queryRunner.createCatalog(HIVE_CATALOG, "hive", ImmutableMap.of("hive.allow-drop-table", "true"));
         queryRunner.createCatalog(
                 "hive_with_redirections",
@@ -101,10 +100,10 @@ public class TestSharedHiveMetastore
     {
         String expectedHiveCreateSchema = "CREATE SCHEMA %s.%s\n" +
                 "WITH (\n" +
-                "   location = 'file:%s/%s'\n" +
+                "   location = 'local:///%s'\n" +
                 ")";
 
-        return format(expectedHiveCreateSchema, catalogName, schema, dataDirectory, schema);
+        return format(expectedHiveCreateSchema, catalogName, schema, schema);
     }
 
     @Override

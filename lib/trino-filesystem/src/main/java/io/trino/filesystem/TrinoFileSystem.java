@@ -13,9 +13,14 @@
  */
 package io.trino.filesystem;
 
+import com.google.common.base.Throwables;
+
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * TrinoFileSystem is the main abstraction for Trino to interact with data in cloud-like storage
@@ -66,6 +71,20 @@ public interface TrinoFileSystem
      * @throws IllegalArgumentException if location is not valid for this file system
      */
     TrinoInputFile newInputFile(Location location, long length);
+
+    /**
+     * Creates a TrinoInputFile with a predeclared length and lastModifiedTime which can be used to read the file data.
+     * The length will be returned from {@link TrinoInputFile#length()} and the actual file length
+     * will never be checked. The lastModified will be returned from {@link TrinoInputFile#lastModified()} and the
+     * actual file last modified time will never be checked. The file location path cannot be empty, and must not end
+     * with a slash or whitespace.
+     *
+     * @throws IllegalArgumentException if location is not valid for this file system
+     */
+    default TrinoInputFile newInputFile(Location location, long length, Instant lastModified)
+    {
+        return newInputFile(location, length);
+    }
 
     /**
      * Creates a TrinoOutputFile which can be used to create or overwrite the file. The file
@@ -169,4 +188,71 @@ public interface TrinoFileSystem
      */
     Optional<Boolean> directoryExists(Location location)
             throws IOException;
+
+     /**
+     * Creates the specified directory and any parent directories that do not exist.
+     * For hierarchical file systems, if the location already exists but is not a
+     * directory, or if the directory cannot be created, an exception is raised.
+     * This method does nothing for non-hierarchical file systems or if the directory
+     * already exists.
+     *
+     * @throws IllegalArgumentException if location is not valid for this file system
+     */
+    void createDirectory(Location location)
+            throws IOException;
+
+    /**
+     * Renames source to target. An exception is raised if the target already exists,
+     * or on non-hierarchical file systems.
+     *
+     * @throws IllegalArgumentException if location is not valid for this file system
+     */
+    void renameDirectory(Location source, Location target)
+            throws IOException;
+
+    /**
+     * Lists all directories that are direct descendants of the specified directory.
+     * If the path is empty, all directories at the root of the file system are returned.
+     * Otherwise, the path must end with a slash.
+     * If the location does not exist, an empty set is returned.
+     * <p>
+     * For hierarchical file systems, if the path is not a directory, an exception is raised.
+     * For hierarchical file systems, if the path does not reference an existing directory,
+     * an empty iterator is returned. For blob file systems, all directories containing
+     * blobs that start with the location are listed.
+     *
+     * @throws IllegalArgumentException if location is not valid for this file system
+     */
+    Set<Location> listDirectories(Location location)
+            throws IOException;
+
+    /**
+     * Creates a temporary directory for the target path. The directory will be created
+     * using the (possibly absolute) prefix such that the directory can be renamed to
+     * the target path. The relative prefix will be used if the target path does not
+     * support the temporary prefix (which is typically absolute).
+     * <p>
+     * The temporary directory is not created for non-hierarchical file systems or for
+     * target paths that do not support renaming, and an empty optional is returned.
+     *
+     * @throws IllegalArgumentException If the target path is not valid for this file system.
+     */
+    Optional<Location> createTemporaryDirectory(Location targetPath, String temporaryPrefix, String relativePrefix)
+            throws IOException;
+
+    /**
+     * Checks whether given exception is unrecoverable, so that further retries won't help
+     * <p>
+     * By default, all third party (AWS, Azure, GCP) SDKs will retry appropriate exceptions
+     * (either client side IO errors, or 500/503), so there is no need to retry those additionally.
+     * <p>
+     * If any custom retry behavior is needed, it is advised to change SDK's retry handlers,
+     * rather than introducing outer retry loop, which combined with SDKs default retries,
+     * could lead to prolonged, unnecessary retries
+     */
+    static boolean isUnrecoverableException(Throwable throwable)
+    {
+        return Throwables.getCausalChain(throwable).stream()
+                .anyMatch(t -> t instanceof TrinoFileSystemException || t instanceof FileNotFoundException || t instanceof UnsupportedOperationException);
+    }
 }

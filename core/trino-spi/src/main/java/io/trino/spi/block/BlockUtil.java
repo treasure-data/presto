@@ -79,20 +79,34 @@ final class BlockUtil
 
     static int calculateNewArraySize(int currentSize)
     {
-        // grow array by 50%
+        return calculateNewArraySize(currentSize, DEFAULT_CAPACITY);
+    }
+
+    static int calculateNewArraySize(int currentSize, int minimumSize)
+    {
+        if (currentSize < 0 || currentSize > MAX_ARRAY_SIZE || minimumSize < 0 || minimumSize > MAX_ARRAY_SIZE) {
+            throw new IllegalArgumentException("Invalid currentSize or minimumSize");
+        }
+        if (currentSize == MAX_ARRAY_SIZE) {
+            throw new IllegalArgumentException("Cannot grow array beyond size " + MAX_ARRAY_SIZE);
+        }
+
+        minimumSize = Math.max(minimumSize, DEFAULT_CAPACITY);
+
+        // grow the array by 50% if possible
         long newSize = (long) currentSize + (currentSize >> 1);
 
-        // verify new size is within reasonable bounds
-        if (newSize < DEFAULT_CAPACITY) {
-            newSize = DEFAULT_CAPACITY;
-        }
-        else if (newSize > MAX_ARRAY_SIZE) {
-            newSize = MAX_ARRAY_SIZE;
-            if (newSize == currentSize) {
-                throw new IllegalArgumentException(format("Cannot grow array beyond '%s'", MAX_ARRAY_SIZE));
-            }
-        }
+        // ensure new size is within bounds
+        newSize = clamp(newSize, minimumSize, MAX_ARRAY_SIZE);
         return (int) newSize;
+    }
+
+    public static int clamp(long value, int min, int max)
+    {
+        if (min > max) {
+            throw new IllegalArgumentException(min + " > " + max);
+        }
+        return (int) Math.min(max, Math.max(value, min));
     }
 
     static int calculateBlockResetSize(int currentSize)

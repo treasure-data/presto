@@ -14,6 +14,7 @@
 package io.trino.filesystem.hdfs;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import io.airlift.stats.TimeStat;
 import io.trino.filesystem.FileIterator;
 import io.trino.filesystem.Location;
@@ -27,6 +28,9 @@ import io.trino.hdfs.TrinoHdfsFileSystemStats;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.fs.viewfs.ViewFileSystem;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -36,12 +40,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.trino.filesystem.hdfs.HadoopPaths.hadoopPath;
+import static io.trino.filesystem.hdfs.HdfsFileIterator.listedLocation;
 import static io.trino.hdfs.FileSystemUtils.getRawFileSystem;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
+import static java.util.UUID.randomUUID;
 import static java.util.stream.Collectors.groupingBy;
 import static java.util.stream.Collectors.mapping;
 import static java.util.stream.Collectors.toList;
@@ -226,6 +236,149 @@ class HdfsFileSystem
             catch (IOException e) {
                 stats.getListFilesCalls().recordException(e);
                 throw e;
+            }
+        });
+    }
+
+    @Override
+    public void createDirectory(Location location)
+            throws IOException
+    {
+        stats.getCreateDirectoryCalls().newCall();
+        Path directory = hadoopPath(location);
+        FileSystem fileSystem = environment.getFileSystem(context, directory);
+
+        environment.doAs(context.getIdentity(), () -> {
+            if (!hierarchical(fileSystem, location)) {
+                return null;
+            }
+            Optional<FsPermission> permission = environment.getNewDirectoryPermissions();
+            try (TimeStat.BlockTimer ignore = stats.getCreateDirectoryCalls().time()) {
+                if (!fileSystem.mkdirs(directory, permission.orElse(null))) {
+                    throw new IOException("mkdirs failed");
+                }
+                // explicitly set permission since the default umask overrides it on creation
+                if (permission.isPresent()) {
+                    fileSystem.setPermission(directory, permission.get());
+                }
+            }
+            catch (IOException e) {
+                stats.getCreateDirectoryCalls().recordException(e);
+                throw new IOException("Create directory %s failed: %s".formatted(location, e.getMessage()), e);
+            }
+            return null;
+        });
+    }
+
+    @Override
+    public void renameDirectory(Location source, Location target)
+            throws IOException
+    {
+        stats.getRenameDirectoryCalls().newCall();
+        Path sourcePath = hadoopPath(source);
+        Path targetPath = hadoopPath(target);
+        FileSystem fileSystem = environment.getFileSystem(context, sourcePath);
+
+        environment.doAs(context.getIdentity(), () -> {
+            try (TimeStat.BlockTimer ignore = stats.getRenameDirectoryCalls().time()) {
+                if (!hierarchical(fileSystem, source)) {
+                    throw new IOException("Non-hierarchical file system '%s' does not support directory renames".formatted(fileSystem.getScheme()));
+                }
+                if (!fileSystem.getFileStatus(sourcePath).isDirectory()) {
+                    throw new IOException("Source location is not a directory");
+                }
+                if (fileSystem.exists(targetPath)) {
+                    throw new IOException("Target location already exists");
+                }
+                if (!fileSystem.rename(sourcePath, targetPath)) {
+                    throw new IOException("rename failed");
+                }
+                return null;
+            }
+            catch (IOException e) {
+                stats.getRenameDirectoryCalls().recordException(e);
+                throw new IOException("Directory rename from %s to %s failed: %s".formatted(source, target, e.getMessage()), e);
+            }
+        });
+    }
+
+    @Override
+    public Set<Location> listDirectories(Location location)
+            throws IOException
+    {
+        stats.getListDirectoriesCalls().newCall();
+        Path directory = hadoopPath(location);
+        FileSystem fileSystem = environment.getFileSystem(context, directory);
+        return environment.doAs(context.getIdentity(), () -> {
+            try (TimeStat.BlockTimer ignore = stats.getListDirectoriesCalls().time()) {
+                FileStatus[] files = fileSystem.listStatus(directory);
+                if (files.length == 0) {
+                    return ImmutableSet.of();
+                }
+                if (files[0].getPath().equals(directory)) {
+                    throw new IOException("Location is a file, not a directory: " + location);
+                }
+                return Stream.of(files)
+                        .filter(FileStatus::isDirectory)
+                        .map(file -> listedLocation(location, directory, file.getPath()))
+                        .map(file -> file.appendSuffix("/"))
+                        .collect(toImmutableSet());
+            }
+            catch (FileNotFoundException e) {
+                return ImmutableSet.of();
+            }
+            catch (IOException e) {
+                stats.getListDirectoriesCalls().recordException(e);
+                throw new IOException("List directories for %s failed: %s".formatted(location, e.getMessage()), e);
+            }
+        });
+    }
+
+    @Override
+    public Optional<Location> createTemporaryDirectory(Location targetLocation, String temporaryPrefix, String relativePrefix)
+            throws IOException
+    {
+        checkArgument(!relativePrefix.contains("/"), "relativePrefix must not contain slash");
+        stats.getCreateTemporaryDirectoryCalls().newCall();
+        Path targetPath = hadoopPath(targetLocation);
+        FileSystem fileSystem = environment.getFileSystem(context, targetPath);
+
+        return environment.doAs(context.getIdentity(), () -> {
+            try (TimeStat.BlockTimer ignore = stats.getCreateTemporaryDirectoryCalls().time()) {
+                FileSystem rawFileSystem = getRawFileSystem(fileSystem);
+
+                // use relative temporary directory on ViewFS
+                String prefix = (rawFileSystem instanceof ViewFileSystem) ? relativePrefix : temporaryPrefix;
+
+                // create a temporary directory on the same file system
+                Path temporaryRoot = new Path(targetPath, prefix);
+                Path temporaryPath = new Path(temporaryRoot, randomUUID().toString());
+                Location temporaryLocation = Location.of(temporaryPath.toString());
+
+                if (!hierarchical(fileSystem, temporaryLocation)) {
+                    return Optional.empty();
+                }
+
+                // files cannot be moved between encryption zones
+                if ((rawFileSystem instanceof DistributedFileSystem distributedFileSystem) &&
+                        (distributedFileSystem.getEZForPath(targetPath) != null)) {
+                    return Optional.empty();
+                }
+
+                Optional<FsPermission> permission = environment.getNewDirectoryPermissions();
+                if (!fileSystem.mkdirs(temporaryPath, permission.orElse(null))) {
+                    throw new IOException("mkdirs failed for " + temporaryPath);
+                }
+                // explicitly set permission since the default umask overrides it on creation
+                if (permission.isPresent()) {
+                    fileSystem.setPermission(temporaryPath, permission.get());
+                }
+
+                return Optional.of(temporaryLocation);
+            }
+            catch (IOException e) {
+                stats.getCreateTemporaryDirectoryCalls().recordException(e);
+                throw new IOException("Create temporary directory for %s failed: %s".formatted(targetLocation, e.getMessage()), e);
             }
         });
     }

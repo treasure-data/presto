@@ -26,6 +26,7 @@ import io.trino.hdfs.authentication.NoHdfsAuthentication;
 import io.trino.hdfs.s3.HiveS3Config;
 import io.trino.hdfs.s3.TrinoS3ConfigurationInitializer;
 import io.trino.plugin.base.CatalogName;
+import io.trino.plugin.base.util.AutoCloseableCloser;
 import io.trino.plugin.hive.TrinoViewHiveMetastore;
 import io.trino.plugin.hive.containers.HiveMinioDataLake;
 import io.trino.plugin.hive.metastore.cache.CachingHiveMetastore;
@@ -46,9 +47,10 @@ import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Verify.verify;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.trino.plugin.hive.TestingThriftHiveMetastoreBuilder.testingThriftHiveMetastoreBuilder;
 import static io.trino.plugin.hive.containers.HiveHadoop.HIVE3_IMAGE;
-import static io.trino.plugin.hive.metastore.cache.CachingHiveMetastore.memoizeMetastore;
+import static io.trino.plugin.hive.metastore.cache.CachingHiveMetastore.createPerTransactionCache;
 import static io.trino.testing.TestingNames.randomNameSuffix;
 import static io.trino.testing.containers.Minio.MINIO_ACCESS_KEY;
 import static io.trino.testing.containers.Minio.MINIO_SECRET_KEY;
@@ -59,6 +61,7 @@ public class TestTrinoHiveCatalogWithHiveMetastore
 {
     private static final String bucketName = "test-hive-catalog-with-hms-" + randomNameSuffix();
 
+    private final AutoCloseableCloser closer = AutoCloseableCloser.create();
     // Use MinIO for storage, since HDFS is hard to get working in a unit test
     private HiveMinioDataLake dataLake;
 
@@ -77,6 +80,7 @@ public class TestTrinoHiveCatalogWithHiveMetastore
             dataLake.stop();
             dataLake = null;
         }
+        closer.close();
     }
 
     @Override
@@ -99,10 +103,10 @@ public class TestTrinoHiveCatalogWithHiveMetastore
         ThriftMetastore thriftMetastore = testingThriftHiveMetastoreBuilder()
                 .thriftMetastoreConfig(new ThriftMetastoreConfig()
                         // Read timed out sometimes happens with the default timeout
-                        .setMetastoreTimeout(new Duration(1, MINUTES)))
+                        .setReadTimeout(new Duration(1, MINUTES)))
                 .metastoreClient(dataLake.getHiveHadoop().getHiveMetastoreEndpoint())
-                .build();
-        CachingHiveMetastore metastore = memoizeMetastore(new BridgingHiveMetastore(thriftMetastore), 1000);
+                .build(closer::register);
+        CachingHiveMetastore metastore = createPerTransactionCache(new BridgingHiveMetastore(thriftMetastore), 1000);
         return new TrinoHiveCatalog(
                 new CatalogName("catalog"),
                 metastore,
@@ -123,10 +127,17 @@ public class TestTrinoHiveCatalogWithHiveMetastore
                     {
                         return thriftMetastore;
                     }
-                }),
+                }, new IcebergHiveCatalogConfig()),
                 useUniqueTableLocations,
                 false,
-                false);
+                false,
+                isHideMaterializedViewStorageTable(),
+                directExecutor());
+    }
+
+    protected boolean isHideMaterializedViewStorageTable()
+    {
+        return true;
     }
 
     @Override

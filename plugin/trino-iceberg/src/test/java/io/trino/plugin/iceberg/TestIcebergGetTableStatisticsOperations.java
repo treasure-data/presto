@@ -23,7 +23,6 @@ import io.trino.metadata.InternalFunctionBundle;
 import io.trino.metadata.MetadataManager;
 import io.trino.plugin.hive.metastore.Database;
 import io.trino.plugin.hive.metastore.HiveMetastore;
-import io.trino.plugin.iceberg.catalog.file.TestingIcebergFileMetastoreCatalogModule;
 import io.trino.plugin.tpch.TpchPlugin;
 import io.trino.spi.security.PrincipalType;
 import io.trino.testing.AbstractTestQueryFramework;
@@ -42,7 +41,6 @@ import java.util.Optional;
 
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
-import static com.google.inject.util.Modules.EMPTY_MODULE;
 import static io.trino.execution.querystats.PlanOptimizersStatsCollector.createPlanOptimizersStatsCollector;
 import static io.trino.plugin.hive.metastore.file.TestingFileHiveMetastore.createTestingFileHiveMetastore;
 import static io.trino.sql.planner.LogicalPlanner.Stage.OPTIMIZED_AND_VALIDATED;
@@ -82,10 +80,11 @@ public class TestIcebergGetTableStatisticsOperations
         localQueryRunner.addFunctions(functions.build());
 
         metastoreDir = Files.createTempDirectory("test_iceberg_get_table_statistics_operations").toFile();
+        localQueryRunner.installPlugin(new TestingIcebergPlugin(metastoreDir.toPath()));
         HiveMetastore metastore = createTestingFileHiveMetastore(metastoreDir);
         localQueryRunner.createCatalog(
                 "iceberg",
-                new TestingIcebergConnectorFactory(Optional.of(new TestingIcebergFileMetastoreCatalogModule(metastore)), Optional.empty(), EMPTY_MODULE),
+                "iceberg",
                 ImmutableMap.of());
         Database database = Database.builder()
                 .setDatabaseName("tiny")

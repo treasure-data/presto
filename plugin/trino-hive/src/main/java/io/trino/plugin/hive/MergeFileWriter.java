@@ -32,9 +32,9 @@ import io.trino.spi.type.TypeManager;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -82,7 +82,7 @@ public class MergeFileWriter
     private final RowIdSortingFileWriterMaker sortingFileWriterMaker;
     private final OrcFileWriterFactory orcFileWriterFactory;
     private final HiveCompressionCodec compressionCodec;
-    private final Properties hiveAcidSchema;
+    private final Map<String, String> hiveAcidSchema;
     private final String bucketFilename;
     private Optional<FileWriter> deleteFileWriter = Optional.empty();
     private Optional<FileWriter> insertFileWriter = Optional.empty();
@@ -245,14 +245,12 @@ public class MergeFileWriter
     private FileWriter getOrCreateInsertFileWriter()
     {
         if (insertFileWriter.isEmpty()) {
-            Properties schemaCopy = new Properties();
-            schemaCopy.putAll(hiveAcidSchema);
             insertFileWriter = orcFileWriterFactory.createFileWriter(
                     deltaDirectory.appendPath(bucketFilename),
                     ACID_COLUMN_NAMES,
                     fromHiveStorageFormat(ORC),
                     compressionCodec,
-                    schemaCopy,
+                    hiveAcidSchema,
                     session,
                     bucketNumber,
                     transaction,
@@ -265,15 +263,13 @@ public class MergeFileWriter
     private FileWriter getOrCreateDeleteFileWriter()
     {
         if (deleteFileWriter.isEmpty()) {
-            Properties schemaCopy = new Properties();
-            schemaCopy.putAll(hiveAcidSchema);
             Location deletePath = deleteDeltaDirectory.appendPath(bucketFilename);
             FileWriter writer = getWriter(orcFileWriterFactory.createFileWriter(
                     deletePath,
                     ACID_COLUMN_NAMES,
                     fromHiveStorageFormat(ORC),
                     compressionCodec,
-                    schemaCopy,
+                    hiveAcidSchema,
                     session,
                     bucketNumber,
                     transaction,

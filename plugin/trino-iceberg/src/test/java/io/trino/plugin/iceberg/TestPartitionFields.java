@@ -109,7 +109,7 @@ public class TestPartitionFields
 
     private static PartitionSpec parseField(String value)
     {
-        return partitionSpec(builder -> parsePartitionField(builder, value));
+        return partitionSpec(builder -> parsePartitionField(builder, value, ""));
     }
 
     private static PartitionSpec partitionSpec(Consumer<PartitionSpec.Builder> consumer)

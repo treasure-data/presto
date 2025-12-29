@@ -21,7 +21,7 @@ import static com.google.common.base.MoreObjects.toStringHelper;
 import static java.util.Objects.requireNonNull;
 
 public class IcebergExpireSnapshotsHandle
-        extends IcebergProcedureHandle
+        implements IcebergProcedureHandle
 {
     private final Duration retentionThreshold;
 

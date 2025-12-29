@@ -19,9 +19,11 @@ import io.airlift.configuration.AbstractConfigurationAwareModule;
 import io.trino.plugin.base.security.ConnectorAccessControlModule;
 import io.trino.plugin.base.security.FileBasedAccessControlModule;
 import io.trino.plugin.base.security.ReadOnlySecurityModule;
+import io.trino.plugin.hive.security.UsingSystemSecurity;
 import io.trino.plugin.iceberg.IcebergSecurityConfig.IcebergSecurity;
 
 import static io.airlift.configuration.ConditionalModule.conditionalModule;
+import static io.airlift.configuration.ConfigurationAwareModule.combine;
 import static io.trino.plugin.iceberg.IcebergSecurityConfig.IcebergSecurity.ALLOW_ALL;
 import static io.trino.plugin.iceberg.IcebergSecurityConfig.IcebergSecurity.FILE;
 import static io.trino.plugin.iceberg.IcebergSecurityConfig.IcebergSecurity.READ_ONLY;
@@ -33,10 +35,15 @@ public class IcebergSecurityModule
     protected void setup(Binder binder)
     {
         install(new ConnectorAccessControlModule());
-        bindSecurityModule(ALLOW_ALL, new AllowAllSecurityModule());
-        bindSecurityModule(READ_ONLY, new ReadOnlySecurityModule());
-        bindSecurityModule(FILE, new FileBasedAccessControlModule());
+        bindSecurityModule(ALLOW_ALL, combine(new AllowAllSecurityModule(), usingSystemSecurity(false)));
+        bindSecurityModule(READ_ONLY, combine(new ReadOnlySecurityModule(), usingSystemSecurity(false)));
+        bindSecurityModule(FILE, combine(new FileBasedAccessControlModule(), usingSystemSecurity(false)));
         // SYSTEM: do not bind an ConnectorAccessControl so the engine will use system security with system roles
+    }
+
+    private static Module usingSystemSecurity(boolean system)
+    {
+        return binder -> binder.bind(boolean.class).annotatedWith(UsingSystemSecurity.class).toInstance(system);
     }
 
     private void bindSecurityModule(IcebergSecurity icebergSecurity, Module module)

@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.hive.orc;
 
+import com.google.shaded.common.shaded.collect.Maps;
 import io.airlift.units.DataSize;
 import io.trino.orc.OrcWriterOptions;
 import org.testng.annotations.DataProvider;
@@ -80,7 +81,7 @@ public class TestOrcWriterOptions
         Properties tableProperties = new Properties();
         tableProperties.setProperty(ORC_BLOOM_FILTER_COLUMNS_KEY, "column_a, column_b");
         tableProperties.setProperty(ORC_BLOOM_FILTER_FPP_KEY, "0.5");
-        OrcWriterOptions orcWriterOptions = getOrcWriterOptions(tableProperties, new OrcWriterOptions());
+        OrcWriterOptions orcWriterOptions = getOrcWriterOptions(Maps.fromProperties(tableProperties), new OrcWriterOptions());
         assertThat(orcWriterOptions.getBloomFilterFpp()).isEqualTo(0.5);
         assertThat(orcWriterOptions.isBloomFilterColumn("column_a")).isTrue();
         assertThat(orcWriterOptions.isBloomFilterColumn("column_b")).isTrue();
@@ -93,7 +94,7 @@ public class TestOrcWriterOptions
         Properties tableProperties = new Properties();
         tableProperties.setProperty(ORC_BLOOM_FILTER_COLUMNS_KEY, "column_with_bloom_filter");
         tableProperties.setProperty(ORC_BLOOM_FILTER_FPP_KEY, "abc");
-        assertThatThrownBy(() -> getOrcWriterOptions(tableProperties, new OrcWriterOptions()))
+        assertThatThrownBy(() -> getOrcWriterOptions(Maps.fromProperties(tableProperties), new OrcWriterOptions()))
                 .hasMessage("Invalid value for orc_bloom_filter_fpp property: abc");
     }
 
@@ -103,7 +104,7 @@ public class TestOrcWriterOptions
         Properties tableProperties = new Properties();
         tableProperties.setProperty(ORC_BLOOM_FILTER_COLUMNS_KEY, "column_with_bloom_filter");
         tableProperties.setProperty(ORC_BLOOM_FILTER_FPP_KEY, fpp);
-        assertThatThrownBy(() -> getOrcWriterOptions(tableProperties, new OrcWriterOptions()))
+        assertThatThrownBy(() -> getOrcWriterOptions(Maps.fromProperties(tableProperties), new OrcWriterOptions()))
                 .hasMessage("bloomFilterFpp should be > 0.0 & < 1.0");
     }
 

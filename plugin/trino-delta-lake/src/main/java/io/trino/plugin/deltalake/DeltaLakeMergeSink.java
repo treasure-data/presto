@@ -55,6 +55,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
@@ -360,7 +361,8 @@ public class DeltaLakeMergeSink
                 .setMaxBlockSize(getParquetWriterBlockSize(session))
                 .setMaxPageSize(getParquetWriterPageSize(session))
                 .build();
-        CompressionCodec compressionCodec = getCompressionCodec(session).getParquetCompressionCodec();
+        CompressionCodec compressionCodec = getCompressionCodec(session).getParquetCompressionCodec()
+                .orElseThrow(); // validated on the session property level
 
         try {
             Closeable rollbackAction = () -> fileSystem.deleteFile(path);
@@ -384,7 +386,6 @@ public class DeltaLakeMergeSink
                     IntStream.range(0, dataColumns.size()).toArray(),
                     compressionCodec,
                     trinoVersion,
-                    false,
                     Optional.empty(),
                     Optional.empty());
         }
@@ -506,13 +507,14 @@ public class DeltaLakeMergeSink
                 dataColumns.stream()
                         .map(DeltaLakeColumnHandle::toHiveColumnHandle)
                         .collect(toImmutableList()),
-                TupleDomain.all(),
+                List.of(TupleDomain.all()),
                 true,
                 parquetDateTimeZone,
                 new FileFormatDataSourceStats(),
                 new ParquetReaderOptions().withBloomFilter(false),
                 Optional.empty(),
-                domainCompactionThreshold);
+                domainCompactionThreshold,
+                OptionalLong.empty());
     }
 
     @Override

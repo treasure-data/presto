@@ -32,7 +32,6 @@ import static io.trino.plugin.hive.HiveType.HIVE_INT;
 import static io.trino.plugin.hive.HiveType.HIVE_STRING;
 import static io.trino.plugin.hive.TableType.MANAGED_TABLE;
 import static io.trino.plugin.hive.metastore.StorageFormat.fromHiveStorageFormat;
-import static io.trino.plugin.hive.util.HiveBucketing.BucketingVersion.BUCKETING_V1;
 import static io.trino.plugin.hudi.model.HudiTableType.COPY_ON_WRITE;
 import static org.testng.Assert.assertEquals;
 
@@ -54,7 +53,6 @@ public class TestHudiPartitionManager
                     Optional.of(LOCATION),
                     Optional.of(new HiveBucketProperty(
                             ImmutableList.of(BUCKET_COLUMN.getName()),
-                            BUCKETING_V1,
                             2,
                             ImmutableList.of())),
                     false,

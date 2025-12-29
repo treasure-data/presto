@@ -18,6 +18,7 @@ import io.trino.memory.context.AggregatedMemoryContext;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.file.FileAlreadyExistsException;
 
 import static io.trino.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 
@@ -27,6 +28,29 @@ public interface TrinoOutputFile
             throws IOException
     {
         return create(newSimpleAggregatedMemoryContext());
+    }
+
+    /**
+     * Create file with the specified content, atomically if possible.
+     * The file will be replaced if it already exists.
+     * If an error occurs while writing and the implementation does not
+     * support atomic writes, then a partial file may be written,
+     * or the original file may be deleted or left unchanged.
+     */
+    void createOrOverwrite(byte[] data)
+            throws IOException;
+
+    /**
+     * Create file exclusively and atomically with the specified content.
+     * If an error occurs while writing, the file will not be created.
+     *
+     * @throws FileAlreadyExistsException if the file already exists
+     * @throws UnsupportedOperationException if the file system does not support this operation
+     */
+    default void createExclusive(byte[] data)
+            throws IOException
+    {
+        throw new UnsupportedOperationException("createExclusive not supported by " + getClass());
     }
 
     default OutputStream createOrOverwrite()

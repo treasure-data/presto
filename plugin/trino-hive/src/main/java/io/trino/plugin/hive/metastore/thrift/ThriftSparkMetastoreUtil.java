@@ -20,11 +20,13 @@ import io.trino.plugin.hive.HiveBasicStatistics;
 import io.trino.plugin.hive.HiveType;
 import io.trino.plugin.hive.PartitionStatistics;
 import io.trino.plugin.hive.metastore.HiveColumnStatistics;
+import io.trino.plugin.hive.metastore.MetastoreUtil;
 import io.trino.plugin.hive.type.PrimitiveTypeInfo;
 import io.trino.plugin.hive.type.TypeInfo;
 
 import java.util.AbstractMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.OptionalLong;
 
@@ -41,10 +43,9 @@ import static io.trino.plugin.hive.metastore.thrift.ThriftMetastoreParameterPars
 import static io.trino.plugin.hive.metastore.thrift.ThriftMetastoreParameterParserUtils.toDouble;
 import static io.trino.plugin.hive.metastore.thrift.ThriftMetastoreParameterParserUtils.toLong;
 import static io.trino.plugin.hive.metastore.thrift.ThriftMetastoreUtil.NUM_ROWS;
-import static io.trino.plugin.hive.metastore.thrift.ThriftMetastoreUtil.getTotalSizeInBytes;
 import static io.trino.plugin.hive.type.Category.PRIMITIVE;
 
-final class ThriftSparkMetastoreUtil
+public final class ThriftSparkMetastoreUtil
 {
     private static final String SPARK_SQL_STATS_PREFIX = "spark.sql.statistics.";
     private static final String COLUMN_STATS_PREFIX = SPARK_SQL_STATS_PREFIX + "colStats.";
@@ -72,6 +73,23 @@ final class ThriftSparkMetastoreUtil
         return new PartitionStatistics(sparkBasicStatistics, columnStatistics);
     }
 
+    public static Optional<PartitionStatistics> getSparkTableStatistics(Map<String, String> parameters, Map<String, HiveType> columns)
+    {
+        if (toLong(parameters.get(MetastoreUtil.NUM_ROWS)).isPresent()) {
+            return Optional.empty();
+        }
+
+        HiveBasicStatistics sparkBasicStatistics = getSparkBasicStatistics(parameters);
+        if (sparkBasicStatistics.getRowCount().isEmpty()) {
+            return Optional.empty();
+        }
+
+        Map<String, HiveColumnStatistics> columnStatistics = columns.entrySet().stream()
+                .map(entry -> Map.entry(entry.getKey(), fromMetastoreColumnStatistics(entry.getKey(), entry.getValue(), parameters)))
+                .collect(toImmutableMap(Map.Entry::getKey, Map.Entry::getValue));
+        return Optional.of(new PartitionStatistics(sparkBasicStatistics, columnStatistics));
+    }
+
     public static HiveBasicStatistics getSparkBasicStatistics(Map<String, String> parameters)
     {
         OptionalLong rowCount = toLong(parameters.get(SPARK_SQL_STATS_PREFIX + NUM_ROWS));
@@ -82,6 +100,63 @@ final class ThriftSparkMetastoreUtil
         OptionalLong inMemoryDataSizeInBytes = toLong(parameters.get(SPARK_SQL_STATS_PREFIX + RAW_DATA_SIZE));
         OptionalLong onDiskDataSizeInBytes = toLong(parameters.get(SPARK_SQL_STATS_PREFIX + TOTAL_SIZE));
         return new HiveBasicStatistics(fileCount, rowCount, inMemoryDataSizeInBytes, onDiskDataSizeInBytes);
+    }
+
+    @VisibleForTesting
+    static HiveColumnStatistics fromMetastoreColumnStatistics(String columnName, HiveType type, Map<String, String> parameters)
+    {
+        TypeInfo typeInfo = type.getTypeInfo();
+        if (typeInfo.getCategory() != PRIMITIVE) {
+            // Spark does not support table statistics for non-primitive types
+            return HiveColumnStatistics.empty();
+        }
+        String field = COLUMN_STATS_PREFIX + columnName + ".";
+        OptionalLong maxLength = toLong(parameters.get(field + "maxLen"));
+        OptionalDouble avgLength = toDouble(parameters.get(field + "avgLen"));
+        OptionalLong nullsCount = toLong(parameters.get(field + "nullCount"));
+        OptionalLong distinctValuesWithNullCount = toLong(parameters.get(field + "distinctCount"));
+
+        return switch (((PrimitiveTypeInfo) typeInfo).getPrimitiveCategory()) {
+            case BOOLEAN -> createBooleanColumnStatistics(
+                    OptionalLong.empty(),
+                    OptionalLong.empty(),
+                    nullsCount);
+            case BYTE, SHORT, INT, LONG -> createIntegerColumnStatistics(
+                    toLong(parameters.get(field + COLUMN_MIN)),
+                    toLong(parameters.get(field + COLUMN_MAX)),
+                    nullsCount,
+                    distinctValuesWithNullCount);
+            case TIMESTAMP -> createIntegerColumnStatistics(
+                    OptionalLong.empty(),
+                    OptionalLong.empty(),
+                    nullsCount,
+                    distinctValuesWithNullCount);
+            case FLOAT, DOUBLE -> createDoubleColumnStatistics(
+                    toDouble(parameters.get(field + COLUMN_MIN)),
+                    toDouble(parameters.get(field + COLUMN_MAX)),
+                    nullsCount,
+                    distinctValuesWithNullCount);
+            case STRING, VARCHAR, CHAR -> createStringColumnStatistics(
+                    maxLength,
+                    avgLength,
+                    nullsCount,
+                    distinctValuesWithNullCount);
+            case DATE -> createDateColumnStatistics(
+                    toDate(parameters.get(field + COLUMN_MIN)),
+                    toDate(parameters.get(field + COLUMN_MAX)),
+                    nullsCount,
+                    distinctValuesWithNullCount);
+            case BINARY -> createBinaryColumnStatistics(
+                    maxLength,
+                    avgLength,
+                    nullsCount);
+            case DECIMAL -> createDecimalColumnStatistics(
+                    toDecimal(parameters.get(field + COLUMN_MIN)),
+                    toDecimal(parameters.get(field + COLUMN_MAX)),
+                    nullsCount,
+                    distinctValuesWithNullCount);
+            case TIMESTAMPLOCALTZ, INTERVAL_YEAR_MONTH, INTERVAL_DAY_TIME, VOID, UNKNOWN -> HiveColumnStatistics.empty();
+        };
     }
 
     @VisibleForTesting
@@ -97,7 +172,7 @@ final class ThriftSparkMetastoreUtil
         OptionalLong maxLength = toLong(columnStatistics.get(field + "maxLen"));
         OptionalDouble avgLength = toDouble(columnStatistics.get(field + "avgLen"));
         OptionalLong nullsCount = toLong(columnStatistics.get(field + "nullCount"));
-        OptionalLong distinctValuesCount = toLong(columnStatistics.get(field + "distinctCount"));
+        OptionalLong distinctValuesWithNullCount = toLong(columnStatistics.get(field + "distinctCount"));
 
         return switch (((PrimitiveTypeInfo) typeInfo).getPrimitiveCategory()) {
             case BOOLEAN -> createBooleanColumnStatistics(
@@ -108,60 +183,37 @@ final class ThriftSparkMetastoreUtil
                     toLong(columnStatistics.get(field + COLUMN_MIN)),
                     toLong(columnStatistics.get(field + COLUMN_MAX)),
                     nullsCount,
-                    fromMetastoreDistinctValuesCount(distinctValuesCount, nullsCount, rowCount));
+                    distinctValuesWithNullCount);
             case TIMESTAMP -> createIntegerColumnStatistics(
                     OptionalLong.empty(),
                     OptionalLong.empty(),
                     nullsCount,
-                    fromMetastoreDistinctValuesCount(distinctValuesCount, nullsCount, rowCount));
+                    distinctValuesWithNullCount);
             case FLOAT, DOUBLE -> createDoubleColumnStatistics(
                     toDouble(columnStatistics.get(field + COLUMN_MIN)),
                     toDouble(columnStatistics.get(field + COLUMN_MAX)),
                     nullsCount,
-                    fromMetastoreDistinctValuesCount(distinctValuesCount, nullsCount, rowCount));
+                    distinctValuesWithNullCount);
             case STRING, VARCHAR, CHAR -> createStringColumnStatistics(
                     maxLength,
-                    getTotalSizeInBytes(avgLength, OptionalLong.of(rowCount), nullsCount),
+                    avgLength,
                     nullsCount,
-                    fromMetastoreDistinctValuesCount(distinctValuesCount, nullsCount, rowCount));
+                    distinctValuesWithNullCount);
             case DATE -> createDateColumnStatistics(
                     toDate(columnStatistics.get(field + COLUMN_MIN)),
                     toDate(columnStatistics.get(field + COLUMN_MAX)),
                     nullsCount,
-                    fromMetastoreDistinctValuesCount(distinctValuesCount, nullsCount, rowCount));
+                    distinctValuesWithNullCount);
             case BINARY -> createBinaryColumnStatistics(
                     maxLength,
-                    getTotalSizeInBytes(avgLength, OptionalLong.of(rowCount), nullsCount),
+                    avgLength,
                     nullsCount);
             case DECIMAL -> createDecimalColumnStatistics(
                     toDecimal(columnStatistics.get(field + COLUMN_MIN)),
                     toDecimal(columnStatistics.get(field + COLUMN_MAX)),
                     nullsCount,
-                    fromMetastoreDistinctValuesCount(distinctValuesCount, nullsCount, rowCount));
+                    distinctValuesWithNullCount);
             case TIMESTAMPLOCALTZ, INTERVAL_YEAR_MONTH, INTERVAL_DAY_TIME, VOID, UNKNOWN -> HiveColumnStatistics.empty();
         };
-    }
-
-    /**
-     * Hive calculates NDV considering null as a distinct value, but Spark doesn't
-     */
-    private static OptionalLong fromMetastoreDistinctValuesCount(OptionalLong distinctValuesCount, OptionalLong nullsCount, long rowCount)
-    {
-        if (distinctValuesCount.isPresent() && nullsCount.isPresent()) {
-            return OptionalLong.of(fromMetastoreDistinctValuesCount(distinctValuesCount.getAsLong(), nullsCount.getAsLong(), rowCount));
-        }
-        return OptionalLong.empty();
-    }
-
-    private static long fromMetastoreDistinctValuesCount(long distinctValuesCount, long nullsCount, long rowCount)
-    {
-        long nonNullsCount = rowCount - nullsCount;
-        // normalize distinctValuesCount in case there is a non-null element
-        if (nonNullsCount > 0 && distinctValuesCount == 0) {
-            distinctValuesCount = 1;
-        }
-
-        // the metastore may store an estimate, so the value stored may be higher than the total number of rows
-        return Math.min(distinctValuesCount, nonNullsCount);
     }
 }

@@ -15,6 +15,7 @@ package io.trino.plugin.hive;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import io.trino.filesystem.Location;
 import io.trino.testing.AbstractTestQueryFramework;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.QueryRunner;
@@ -23,9 +24,8 @@ import org.testng.annotations.Test;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.UUID;
 
-import static com.google.common.io.MoreFiles.deleteRecursively;
-import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static io.trino.testing.QueryAssertions.assertEqualsIgnoreOrder;
 import static io.trino.tpch.TpchTable.CUSTOMER;
 import static io.trino.tpch.TpchTable.ORDERS;
@@ -50,14 +50,13 @@ public class TestHiveCreateExternalTable
     public void testCreateExternalTableWithData()
             throws IOException
     {
-        Path tempDir = createTempDirectory(null);
-        Path tableLocation = tempDir.resolve("data");
+        Location tempDir = Location.of("local:///temp_" + UUID.randomUUID());
 
         @Language("SQL") String createTableSql = format("" +
                         "CREATE TABLE test_create_external " +
                         "WITH (external_location = '%s') AS " +
                         "SELECT * FROM tpch.tiny.nation",
-                tableLocation.toUri().toASCIIString());
+                tempDir);
 
         assertUpdate(createTableSql, 25);
 
@@ -67,10 +66,9 @@ public class TestHiveCreateExternalTable
 
         MaterializedResult result = computeActual("SELECT DISTINCT regexp_replace(\"$path\", '/[^/]*$', '/') FROM test_create_external");
         String tablePath = (String) result.getOnlyValue();
-        assertThat(tablePath).startsWith(tableLocation.toFile().toURI().toString());
+        assertThat(tablePath).startsWith(tempDir.toString());
 
         assertUpdate("DROP TABLE test_create_external");
-        deleteRecursively(tempDir, ALLOW_INSECURE);
     }
 
     @Test

@@ -19,6 +19,7 @@ import io.trino.spi.Page;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.block.ColumnarRow;
+import io.trino.spi.block.DictionaryBlock;
 import io.trino.spi.block.LazyBlock;
 import io.trino.spi.block.RowBlock;
 import io.trino.spi.connector.ColumnHandle;
@@ -115,8 +116,9 @@ public class TestReaderProjectionsAdapter
         assertFalse(columnarRowLevel1.getField(1).isLoaded());
 
         Block lazyBlockLevel2 = columnarRowLevel1.getField(0);
-        assertTrue(lazyBlockLevel2 instanceof LazyBlock);
-        RowBlock rowBlockLevel2 = ((RowBlock) (((LazyBlock) lazyBlockLevel2).getBlock()));
+        assertTrue(lazyBlockLevel2 instanceof DictionaryBlock);
+        assertTrue(((DictionaryBlock) lazyBlockLevel2).getDictionary() instanceof LazyBlock);
+        RowBlock rowBlockLevel2 = ((RowBlock) ((LazyBlock) ((DictionaryBlock) lazyBlockLevel2).getDictionary()).getBlock());
         assertFalse(rowBlockLevel2.isLoaded());
         ColumnarRow columnarRowLevel2 = toColumnarRow(rowBlockLevel2);
         // Assertion for "col.f_row_0.f_bigint_0" and "col.f_row_0.f_bigint_1"
@@ -186,6 +188,9 @@ public class TestReaderProjectionsAdapter
             RowData row = (RowData) data.get(position);
             if (row == null) {
                 isNull[position] = true;
+                for (int field = 0; field < fieldCount; field++) {
+                    fieldsData.get(field).add(null);
+                }
             }
             else {
                 for (int field = 0; field < fieldCount; field++) {

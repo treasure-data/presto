@@ -19,10 +19,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.inject.Inject;
 import io.trino.filesystem.Location;
-import io.trino.hdfs.HdfsContext;
-import io.trino.hdfs.HdfsEnvironment;
 import io.trino.plugin.hive.HivePageSource.BucketValidator;
-import io.trino.plugin.hive.HiveRecordCursorProvider.ReaderRecordCursorWithProjections;
 import io.trino.plugin.hive.HiveSplit.BucketConversion;
 import io.trino.plugin.hive.HiveSplit.BucketValidation;
 import io.trino.plugin.hive.acid.AcidTransaction;
@@ -37,15 +34,10 @@ import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTransactionHandle;
 import io.trino.spi.connector.DynamicFilter;
 import io.trino.spi.connector.EmptyPageSource;
-import io.trino.spi.connector.RecordCursor;
-import io.trino.spi.connector.RecordPageSource;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.NullableValue;
 import io.trino.spi.predicate.TupleDomain;
-import io.trino.spi.type.Type;
 import io.trino.spi.type.TypeManager;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -55,7 +47,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.Properties;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -86,28 +77,18 @@ public class HivePageSourceProvider
     private static final Pattern ORIGINAL_FILE_PATH_MATCHER = Pattern.compile("(?s)(?<rootDir>.*)/(?<filename>(?<bucketNumber>\\d+)_(?<rest>.*)?)$");
 
     private final TypeManager typeManager;
-    private final HdfsEnvironment hdfsEnvironment;
     private final int domainCompactionThreshold;
     private final Set<HivePageSourceFactory> pageSourceFactories;
-    private final Set<HiveRecordCursorProvider> cursorProviders;
 
     @Inject
     public HivePageSourceProvider(
             TypeManager typeManager,
-            HdfsEnvironment hdfsEnvironment,
             HiveConfig hiveConfig,
-            Set<HivePageSourceFactory> pageSourceFactories,
-            Set<HiveRecordCursorProvider> cursorProviders,
-            GenericHiveRecordCursorProvider genericCursorProvider)
+            Set<HivePageSourceFactory> pageSourceFactories)
     {
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
-        this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.domainCompactionThreshold = hiveConfig.getDomainCompactionThreshold();
         this.pageSourceFactories = ImmutableSet.copyOf(requireNonNull(pageSourceFactories, "pageSourceFactories is null"));
-        this.cursorProviders = ImmutableSet.<HiveRecordCursorProvider>builder()
-                .addAll(requireNonNull(cursorProviders, "cursorProviders is null"))
-                .add(genericCursorProvider) // generic should be last, as a fallback option
-                .build();
     }
 
     @Override
@@ -137,7 +118,7 @@ public class HivePageSourceProvider
                 hiveSplit.getPartitionKeys(),
                 hiveColumns,
                 hiveSplit.getBucketConversion().map(BucketConversion::bucketColumnHandles).orElse(ImmutableList.of()),
-                hiveSplit.getTableToPartitionMapping(),
+                hiveSplit.getHiveColumnCoercions(),
                 hiveSplit.getPath(),
                 hiveSplit.getTableBucketNumber(),
                 hiveSplit.getEstimatedFileSize(),
@@ -149,27 +130,22 @@ public class HivePageSourceProvider
             return new EmptyPageSource();
         }
 
-        Configuration configuration = hdfsEnvironment.getConfiguration(new HdfsContext(session), new Path(hiveSplit.getPath()));
-
         Optional<ConnectorPageSource> pageSource = createHivePageSource(
                 pageSourceFactories,
-                cursorProviders,
-                configuration,
                 session,
                 Location.of(hiveSplit.getPath()),
                 hiveSplit.getTableBucketNumber(),
                 hiveSplit.getStart(),
                 hiveSplit.getLength(),
                 hiveSplit.getEstimatedFileSize(),
+                hiveSplit.getFileModifiedTime(),
                 hiveSplit.getSchema(),
                 hiveTable.getCompactEffectivePredicate().intersect(
                                 dynamicFilter.getCurrentPredicate().transformKeys(HiveColumnHandle.class::cast))
                         .simplify(domainCompactionThreshold),
-                hiveColumns,
                 typeManager,
                 hiveSplit.getBucketConversion(),
                 hiveSplit.getBucketValidation(),
-                hiveSplit.isS3SelectPushdownEnabled(),
                 hiveSplit.getAcidInfo(),
                 originalFile,
                 hiveTable.getTransaction(),
@@ -183,21 +159,18 @@ public class HivePageSourceProvider
 
     public static Optional<ConnectorPageSource> createHivePageSource(
             Set<HivePageSourceFactory> pageSourceFactories,
-            Set<HiveRecordCursorProvider> cursorProviders,
-            Configuration configuration,
             ConnectorSession session,
             Location path,
             OptionalInt tableBucketNumber,
             long start,
             long length,
             long estimatedFileSize,
-            Properties schema,
+            long fileModifiedTime,
+            Schema schema,
             TupleDomain<HiveColumnHandle> effectivePredicate,
-            List<HiveColumnHandle> columns,
             TypeManager typeManager,
             Optional<BucketConversion> bucketConversion,
             Optional<BucketValidation> bucketValidation,
-            boolean s3SelectPushdownEnabled,
             Optional<AcidInfo> acidInfo,
             boolean originalFile,
             AcidTransaction transaction,
@@ -223,6 +196,7 @@ public class HivePageSourceProvider
                     start,
                     length,
                     estimatedFileSize,
+                    fileModifiedTime,
                     schema,
                     desiredColumns,
                     effectivePredicate,
@@ -248,58 +222,6 @@ public class HivePageSourceProvider
                         typeManager,
                         timestampPrecision,
                         pageSource));
-            }
-        }
-
-        for (HiveRecordCursorProvider provider : cursorProviders) {
-            List<HiveColumnHandle> desiredColumns = toColumnHandles(regularAndInterimColumnMappings, false, typeManager, timestampPrecision);
-            Optional<ReaderRecordCursorWithProjections> readerWithProjections = provider.createRecordCursor(
-                    configuration,
-                    session,
-                    path,
-                    start,
-                    length,
-                    estimatedFileSize,
-                    schema,
-                    desiredColumns,
-                    effectivePredicate,
-                    typeManager,
-                    s3SelectPushdownEnabled);
-
-            if (readerWithProjections.isPresent()) {
-                RecordCursor delegate = readerWithProjections.get().getRecordCursor();
-                Optional<ReaderColumns> projections = readerWithProjections.get().getProjectedReaderColumns();
-
-                if (projections.isPresent()) {
-                    ReaderProjectionsAdapter projectionsAdapter = hiveProjectionsAdapter(desiredColumns, projections.get());
-                    delegate = new HiveReaderProjectionsAdaptingRecordCursor(delegate, projectionsAdapter);
-                }
-
-                checkArgument(acidInfo.isEmpty(), "Acid is not supported");
-
-                if (bucketAdaptation.isPresent()) {
-                    delegate = new HiveBucketAdapterRecordCursor(
-                            bucketAdaptation.get().getBucketColumnIndices(),
-                            bucketAdaptation.get().getBucketColumnHiveTypes(),
-                            bucketAdaptation.get().getBucketingVersion(),
-                            bucketAdaptation.get().getTableBucketCount(),
-                            bucketAdaptation.get().getPartitionBucketCount(),
-                            bucketAdaptation.get().getBucketToKeep(),
-                            typeManager,
-                            delegate);
-                }
-
-                // bucket adaptation already validates that data is in the right bucket
-                if (bucketAdaptation.isEmpty() && bucketValidator.isPresent()) {
-                    delegate = bucketValidator.get().wrapRecordCursor(delegate, typeManager);
-                }
-
-                HiveRecordCursor hiveRecordCursor = new HiveRecordCursor(columnMappings, delegate);
-                List<Type> columnTypes = columns.stream()
-                        .map(HiveColumnHandle::getType)
-                        .collect(toList());
-
-                return Optional.of(new RecordPageSource(columnTypes, hiveRecordCursor));
             }
         }
 
@@ -453,7 +375,7 @@ public class HivePageSourceProvider
                 List<HivePartitionKey> partitionKeys,
                 List<HiveColumnHandle> columns,
                 List<HiveColumnHandle> requiredInterimColumns,
-                TableToPartitionMapping tableToPartitionMapping,
+                Map<Integer, HiveTypeName> hiveColumnCoercions,
                 String path,
                 OptionalInt bucketNumber,
                 long estimatedFileSize,
@@ -469,7 +391,7 @@ public class HivePageSourceProvider
             int regularIndex = 0;
 
             for (HiveColumnHandle column : columns) {
-                Optional<HiveType> baseTypeCoercionFrom = tableToPartitionMapping.getCoercion(column.getBaseHiveColumnIndex());
+                Optional<HiveType> baseTypeCoercionFrom = Optional.ofNullable(hiveColumnCoercions.get(column.getBaseHiveColumnIndex())).map(HiveTypeName::toHiveType);
                 if (column.getColumnType() == REGULAR) {
                     if (column.isBaseColumn()) {
                         baseColumnHiveIndices.add(column.getBaseHiveColumnIndex());
@@ -520,7 +442,8 @@ public class HivePageSourceProvider
                 }
 
                 if (projectionsForColumn.containsKey(column.getBaseHiveColumnIndex())) {
-                    columnMappings.add(interim(column, regularIndex, tableToPartitionMapping.getCoercion(column.getBaseHiveColumnIndex())));
+                    Optional<HiveType> baseTypeCoercionFrom = Optional.ofNullable(hiveColumnCoercions.get(column.getBaseHiveColumnIndex())).map(HiveTypeName::toHiveType);
+                    columnMappings.add(interim(column, regularIndex, baseTypeCoercionFrom));
                 }
                 else {
                     // If coercion does not affect bucket number calculation, coercion doesn't need to be applied here.

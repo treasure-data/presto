@@ -17,6 +17,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.testing.TempFile;
+import io.trino.filesystem.Location;
+import io.trino.filesystem.TrinoFileSystemFactory;
+import io.trino.filesystem.memory.MemoryFileSystemFactory;
 import io.trino.metadata.TableHandle;
 import io.trino.plugin.hive.metastore.Column;
 import io.trino.plugin.hive.orc.OrcReaderConfig;
@@ -30,6 +33,7 @@ import io.trino.spi.connector.DynamicFilter;
 import io.trino.spi.connector.EmptyPageSource;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
+import io.trino.spi.security.ConnectorIdentity;
 import io.trino.testing.TestingConnectorSession;
 import org.testng.annotations.Test;
 
@@ -38,23 +42,18 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static io.trino.plugin.hive.HiveColumnHandle.ColumnType.PARTITION_KEY;
 import static io.trino.plugin.hive.HiveColumnHandle.ColumnType.REGULAR;
-import static io.trino.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
 import static io.trino.plugin.hive.HiveTestUtils.getDefaultHivePageSourceFactories;
-import static io.trino.plugin.hive.HiveTestUtils.getDefaultHiveRecordCursorProviders;
 import static io.trino.plugin.hive.HiveType.HIVE_INT;
 import static io.trino.plugin.hive.util.HiveBucketing.BucketingVersion.BUCKETING_V1;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.testing.TestingHandles.TEST_CATALOG_HANDLE;
 import static io.trino.type.InternalTypeManager.TESTING_TYPE_MANAGER;
 import static java.util.concurrent.CompletableFuture.completedFuture;
-import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.FILE_INPUT_FORMAT;
-import static org.apache.hadoop.hive.serde.serdeConstants.SERIALIZATION_LIB;
 import static org.testng.Assert.assertEquals;
 
 public class TestNodeLocalDynamicSplitPruning
@@ -115,27 +114,28 @@ public class TestNodeLocalDynamicSplitPruning
     }
 
     private static ConnectorPageSource createTestingPageSource(HiveTransactionHandle transaction, HiveConfig hiveConfig, File outputFile, DynamicFilter dynamicFilter)
+            throws IOException
     {
-        Properties splitProperties = new Properties();
-        splitProperties.setProperty(FILE_INPUT_FORMAT, hiveConfig.getHiveStorageFormat().getInputFormat());
-        splitProperties.setProperty(SERIALIZATION_LIB, hiveConfig.getHiveStorageFormat().getSerde());
+        Location location = Location.of("memory:///file");
+        TrinoFileSystemFactory fileSystemFactory = new MemoryFileSystemFactory();
+        fileSystemFactory.create(ConnectorIdentity.ofUser("test")).newOutputFile(location).create().close();
+
         HiveSplit split = new HiveSplit(
                 "",
-                "file:///" + outputFile.getAbsolutePath(),
+                location.toString(),
                 0,
-                outputFile.length(),
-                outputFile.length(),
-                outputFile.lastModified(),
-                splitProperties,
+                0,
+                0,
+                0,
+                new Schema(hiveConfig.getHiveStorageFormat().getSerde(), false, ImmutableMap.of()),
                 ImmutableList.of(new HivePartitionKey(PARTITION_COLUMN.getName(), "42")),
                 ImmutableList.of(),
                 OptionalInt.of(1),
                 OptionalInt.of(1),
                 false,
-                TableToPartitionMapping.empty(),
+                ImmutableMap.of(),
                 Optional.empty(),
                 Optional.empty(),
-                false,
                 Optional.empty(),
                 SplitWeight.standard());
 
@@ -147,21 +147,20 @@ public class TestNodeLocalDynamicSplitPruning
                         ImmutableMap.of(),
                         ImmutableList.of(),
                         ImmutableList.of(BUCKET_HIVE_COLUMN_HANDLE),
-                        Optional.of(new HiveBucketHandle(
-                                ImmutableList.of(BUCKET_HIVE_COLUMN_HANDLE),
+                        Optional.of(new HiveTablePartitioning(
+                                true,
                                 BUCKETING_V1,
                                 20,
-                                20,
-                                ImmutableList.of()))),
+                                ImmutableList.of(BUCKET_HIVE_COLUMN_HANDLE),
+                                false,
+                                ImmutableList.of(),
+                                true))),
                 transaction);
 
         HivePageSourceProvider provider = new HivePageSourceProvider(
                 TESTING_TYPE_MANAGER,
-                HDFS_ENVIRONMENT,
                 hiveConfig,
-                getDefaultHivePageSourceFactories(HDFS_ENVIRONMENT, hiveConfig),
-                getDefaultHiveRecordCursorProviders(hiveConfig, HDFS_ENVIRONMENT),
-                new GenericHiveRecordCursorProvider(HDFS_ENVIRONMENT, hiveConfig));
+                getDefaultHivePageSourceFactories(fileSystemFactory, hiveConfig));
 
         return provider.createPageSource(
                 transaction,
@@ -209,7 +208,6 @@ public class TestNodeLocalDynamicSplitPruning
         return TestingConnectorSession.builder()
                 .setPropertyMetadata(new HiveSessionProperties(
                         config,
-                        new HiveFormatsConfig(),
                         new OrcReaderConfig(),
                         new OrcWriterConfig(),
                         new ParquetReaderConfig(),

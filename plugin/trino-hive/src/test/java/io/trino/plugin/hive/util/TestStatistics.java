@@ -44,9 +44,6 @@ import static io.trino.plugin.hive.HiveColumnStatisticType.MAX_VALUE;
 import static io.trino.plugin.hive.HiveColumnStatisticType.MIN_VALUE;
 import static io.trino.plugin.hive.HiveColumnStatisticType.NUMBER_OF_DISTINCT_VALUES;
 import static io.trino.plugin.hive.HiveColumnStatisticType.NUMBER_OF_NON_NULL_VALUES;
-import static io.trino.plugin.hive.metastore.HiveColumnStatistics.createBinaryColumnStatistics;
-import static io.trino.plugin.hive.metastore.HiveColumnStatistics.createBooleanColumnStatistics;
-import static io.trino.plugin.hive.metastore.HiveColumnStatistics.createIntegerColumnStatistics;
 import static io.trino.plugin.hive.util.Statistics.ReduceOperator.ADD;
 import static io.trino.plugin.hive.util.Statistics.ReduceOperator.SUBTRACT;
 import static io.trino.plugin.hive.util.Statistics.createHiveColumnStatistics;
@@ -250,36 +247,23 @@ public class TestStatistics
                 HiveColumnStatistics.builder().setMaxValueSizeInBytes(OptionalLong.of(2)).build(),
                 HiveColumnStatistics.builder().setMaxValueSizeInBytes(OptionalLong.of(3)).build(),
                 HiveColumnStatistics.builder().setMaxValueSizeInBytes(OptionalLong.of(3)).build());
-
-        assertMergeHiveColumnStatistics(
-                HiveColumnStatistics.builder().setTotalSizeInBytes(OptionalLong.empty()).build(),
-                HiveColumnStatistics.builder().setTotalSizeInBytes(OptionalLong.empty()).build(),
-                HiveColumnStatistics.builder().setTotalSizeInBytes(OptionalLong.empty()).build());
-        assertMergeHiveColumnStatistics(
-                HiveColumnStatistics.builder().setTotalSizeInBytes(OptionalLong.of(1)).build(),
-                HiveColumnStatistics.builder().setTotalSizeInBytes(OptionalLong.empty()).build(),
-                HiveColumnStatistics.builder().setTotalSizeInBytes(OptionalLong.of(1)).build());
-        assertMergeHiveColumnStatistics(
-                HiveColumnStatistics.builder().setTotalSizeInBytes(OptionalLong.of(2)).build(),
-                HiveColumnStatistics.builder().setTotalSizeInBytes(OptionalLong.of(3)).build(),
-                HiveColumnStatistics.builder().setTotalSizeInBytes(OptionalLong.of(5)).build());
     }
 
     @Test
     public void testMergeGenericColumnStatistics()
     {
         assertMergeHiveColumnStatistics(
-                HiveColumnStatistics.builder().setDistinctValuesCount(OptionalLong.empty()).build(),
-                HiveColumnStatistics.builder().setDistinctValuesCount(OptionalLong.empty()).build(),
-                HiveColumnStatistics.builder().setDistinctValuesCount(OptionalLong.empty()).build());
+                HiveColumnStatistics.builder().setDistinctValuesWithNullCount(OptionalLong.empty()).build(),
+                HiveColumnStatistics.builder().setDistinctValuesWithNullCount(OptionalLong.empty()).build(),
+                HiveColumnStatistics.builder().setDistinctValuesWithNullCount(OptionalLong.empty()).build());
         assertMergeHiveColumnStatistics(
-                HiveColumnStatistics.builder().setDistinctValuesCount(OptionalLong.of(1)).build(),
-                HiveColumnStatistics.builder().setDistinctValuesCount(OptionalLong.empty()).build(),
-                HiveColumnStatistics.builder().setDistinctValuesCount(OptionalLong.empty()).build());
+                HiveColumnStatistics.builder().setDistinctValuesWithNullCount(OptionalLong.of(1)).build(),
+                HiveColumnStatistics.builder().setDistinctValuesWithNullCount(OptionalLong.empty()).build(),
+                HiveColumnStatistics.builder().setDistinctValuesWithNullCount(OptionalLong.empty()).build());
         assertMergeHiveColumnStatistics(
-                HiveColumnStatistics.builder().setDistinctValuesCount(OptionalLong.of(1)).build(),
-                HiveColumnStatistics.builder().setDistinctValuesCount(OptionalLong.of(2)).build(),
-                HiveColumnStatistics.builder().setDistinctValuesCount(OptionalLong.of(2)).build());
+                HiveColumnStatistics.builder().setDistinctValuesWithNullCount(OptionalLong.of(1)).build(),
+                HiveColumnStatistics.builder().setDistinctValuesWithNullCount(OptionalLong.of(2)).build(),
+                HiveColumnStatistics.builder().setDistinctValuesWithNullCount(OptionalLong.of(2)).build());
 
         assertMergeHiveColumnStatistics(
                 HiveColumnStatistics.builder().setNullsCount(OptionalLong.empty()).build(),
@@ -293,26 +277,6 @@ public class TestStatistics
                 HiveColumnStatistics.builder().setNullsCount(OptionalLong.of(1)).build(),
                 HiveColumnStatistics.builder().setNullsCount(OptionalLong.of(2)).build(),
                 HiveColumnStatistics.builder().setNullsCount(OptionalLong.of(3)).build());
-    }
-
-    @Test
-    public void testMergeHiveColumnStatisticsMap()
-    {
-        Map<String, HiveColumnStatistics> first = ImmutableMap.of(
-                "column1", createIntegerColumnStatistics(OptionalLong.of(1), OptionalLong.of(2), OptionalLong.of(3), OptionalLong.of(4)),
-                "column2", HiveColumnStatistics.createDoubleColumnStatistics(OptionalDouble.of(2), OptionalDouble.of(3), OptionalLong.of(4), OptionalLong.of(5)),
-                "column3", createBinaryColumnStatistics(OptionalLong.of(5), OptionalLong.of(5), OptionalLong.of(10)),
-                "column4", createBooleanColumnStatistics(OptionalLong.of(1), OptionalLong.of(2), OptionalLong.of(3)));
-        Map<String, HiveColumnStatistics> second = ImmutableMap.of(
-                "column5", createIntegerColumnStatistics(OptionalLong.of(1), OptionalLong.of(2), OptionalLong.of(3), OptionalLong.of(4)),
-                "column2", HiveColumnStatistics.createDoubleColumnStatistics(OptionalDouble.of(1), OptionalDouble.of(4), OptionalLong.of(4), OptionalLong.of(6)),
-                "column3", createBinaryColumnStatistics(OptionalLong.of(6), OptionalLong.of(5), OptionalLong.of(10)),
-                "column6", createBooleanColumnStatistics(OptionalLong.of(1), OptionalLong.of(2), OptionalLong.of(3)));
-        Map<String, HiveColumnStatistics> expected = ImmutableMap.of(
-                "column2", HiveColumnStatistics.createDoubleColumnStatistics(OptionalDouble.of(1), OptionalDouble.of(4), OptionalLong.of(8), OptionalLong.of(6)),
-                "column3", createBinaryColumnStatistics(OptionalLong.of(6), OptionalLong.of(10), OptionalLong.of(20)));
-        assertThat(merge(first, second)).isEqualTo(expected);
-        assertThat(merge(ImmutableMap.of(), ImmutableMap.of())).isEqualTo(ImmutableMap.of());
     }
 
     @Test
@@ -344,7 +308,7 @@ public class TestStatistics
                 HiveColumnStatistics.builder()
                         .setIntegerStatistics(new IntegerStatistics(OptionalLong.of(1), OptionalLong.of(5)))
                         .setNullsCount(0)
-                        .setDistinctValuesCount(5)
+                        .setDistinctValuesWithNullCount(5)
                         .build());
         assertThat(columnStatistics.get("b_column")).isEqualTo(
                 HiveColumnStatistics.builder()

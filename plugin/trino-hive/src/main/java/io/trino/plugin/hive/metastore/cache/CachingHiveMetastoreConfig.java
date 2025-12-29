@@ -22,6 +22,8 @@ import jakarta.validation.constraints.NotNull;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
+import static com.google.common.base.MoreObjects.firstNonNull;
+
 public class CachingHiveMetastoreConfig
 {
     private Duration metastoreCacheTtl = new Duration(0, TimeUnit.SECONDS);
@@ -35,6 +37,8 @@ public class CachingHiveMetastoreConfig
     private int maxMetastoreRefreshThreads = 10;
     private boolean cacheMissing = true;
     private boolean partitionCacheEnabled = true;
+    private Boolean cacheMissingPartitions;
+    private Boolean cacheMissingStats;
 
     @NotNull
     public Duration getMetastoreCacheTtl()
@@ -122,6 +126,30 @@ public class CachingHiveMetastoreConfig
     public CachingHiveMetastoreConfig setPartitionCacheEnabled(boolean enabled)
     {
         this.partitionCacheEnabled = enabled;
+        return this;
+    }
+
+    public boolean isCacheMissingPartitions()
+    {
+        return firstNonNull(cacheMissingPartitions, cacheMissing);
+    }
+
+    @Config("hive.metastore-cache.cache-missing-partitions")
+    public CachingHiveMetastoreConfig setCacheMissingPartitions(boolean cacheMissingPartitions)
+    {
+        this.cacheMissingPartitions = cacheMissingPartitions;
+        return this;
+    }
+
+    public boolean isCacheMissingStats()
+    {
+        return firstNonNull(cacheMissingStats, cacheMissing);
+    }
+
+    @Config("hive.metastore-cache.cache-missing-stats")
+    public CachingHiveMetastoreConfig setCacheMissingStats(boolean cacheMissingStats)
+    {
+        this.cacheMissingStats = cacheMissingStats;
         return this;
     }
 }

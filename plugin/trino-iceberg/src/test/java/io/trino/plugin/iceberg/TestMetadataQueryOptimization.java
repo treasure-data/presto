@@ -35,7 +35,6 @@ import java.util.Optional;
 
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
-import static com.google.inject.util.Modules.EMPTY_MODULE;
 import static io.trino.SystemSessionProperties.TASK_PARTITIONED_WRITER_COUNT;
 import static io.trino.plugin.hive.metastore.file.TestingFileHiveMetastore.createTestingFileHiveMetastore;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.anyTree;
@@ -75,7 +74,7 @@ public class TestMetadataQueryOptimization
 
         queryRunner.createCatalog(
                 ICEBERG_CATALOG,
-                new TestingIcebergConnectorFactory(Optional.of(new TestingIcebergFileMetastoreCatalogModule(metastore)), Optional.empty(), EMPTY_MODULE),
+                new TestingIcebergConnectorFactory(baseDir.toPath(), Optional.of(new TestingIcebergFileMetastoreCatalogModule(metastore))),
                 ImmutableMap.of());
 
         Database database = Database.builder()
@@ -107,8 +106,8 @@ public class TestMetadataQueryOptimization
                 anyTree(values(
                         ImmutableList.of("b", "c"),
                         ImmutableList.of(
-                                ImmutableList.of(new LongLiteral("6"), new LongLiteral("7")),
-                                ImmutableList.of(new LongLiteral("9"), new LongLiteral("10"))))));
+                                ImmutableList.of(new LongLiteral("9"), new LongLiteral("10")),
+                                ImmutableList.of(new LongLiteral("6"), new LongLiteral("7"))))));
 
         assertPlan(
                 format("SELECT DISTINCT b, c FROM %s WHERE b > 7", testTable),

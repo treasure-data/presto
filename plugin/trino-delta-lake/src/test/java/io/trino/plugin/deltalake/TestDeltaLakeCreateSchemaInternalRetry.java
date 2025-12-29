@@ -15,6 +15,7 @@ package io.trino.plugin.deltalake;
 
 import com.google.common.collect.ImmutableMap;
 import io.trino.Session;
+import io.trino.filesystem.local.LocalFileSystemFactory;
 import io.trino.plugin.deltalake.metastore.TestingDeltaLakeMetastoreModule;
 import io.trino.plugin.hive.NodeVersion;
 import io.trino.plugin.hive.SchemaAlreadyExistsException;
@@ -38,8 +39,7 @@ import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static com.google.inject.util.Modules.EMPTY_MODULE;
 import static io.trino.plugin.deltalake.DeltaLakeConnectorFactory.CONNECTOR_NAME;
-import static io.trino.plugin.hive.HiveMetadata.PRESTO_QUERY_ID_NAME;
-import static io.trino.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
+import static io.trino.plugin.hive.HiveMetadata.TRINO_QUERY_ID_NAME;
 import static io.trino.testing.TestingNames.randomNameSuffix;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 
@@ -63,9 +63,10 @@ public class TestDeltaLakeCreateSchemaInternalRetry
         DistributedQueryRunner queryRunner = DistributedQueryRunner.builder(session).build();
 
         this.dataDirectory = queryRunner.getCoordinator().getBaseDataDir().resolve("delta_lake_data").toString();
+        LocalFileSystemFactory fileSystemFactory = new LocalFileSystemFactory(Path.of(dataDirectory));
         this.metastore = new FileHiveMetastore(
                 new NodeVersion("testversion"),
-                HDFS_ENVIRONMENT,
+                fileSystemFactory,
                 new HiveMetastoreConfig().isHideDeltaLakeTables(),
                 new FileHiveMetastoreConfig()
                         .setCatalogDirectory(dataDirectory)
@@ -77,7 +78,7 @@ public class TestDeltaLakeCreateSchemaInternalRetry
                 if (database.getDatabaseName().equals(TEST_SCHEMA_DIFFERENT_SESSION)) {
                     // By modifying query id test simulates that schema was created from different session.
                     database = Database.builder(database)
-                            .setParameters(ImmutableMap.of(PRESTO_QUERY_ID_NAME, "new_query_id"))
+                            .setParameters(ImmutableMap.of(TRINO_QUERY_ID_NAME, "new_query_id"))
                             .build();
                 }
                 // Simulate retry mechanism with timeout failure.

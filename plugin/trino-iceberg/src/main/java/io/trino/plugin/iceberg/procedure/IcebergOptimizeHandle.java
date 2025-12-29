@@ -30,7 +30,7 @@ import static com.google.common.base.MoreObjects.toStringHelper;
 import static java.util.Objects.requireNonNull;
 
 public class IcebergOptimizeHandle
-        extends IcebergProcedureHandle
+        implements IcebergProcedureHandle
 {
     private final Optional<Long> snapshotId;
     private final String schemaAsJson;

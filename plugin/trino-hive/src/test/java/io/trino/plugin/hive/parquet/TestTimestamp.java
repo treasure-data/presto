@@ -19,7 +19,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Range;
 import io.trino.plugin.hive.HiveConfig;
 import io.trino.plugin.hive.HiveTimestampPrecision;
-import io.trino.plugin.hive.benchmark.StandardFileFormats;
 import io.trino.spi.Page;
 import io.trino.spi.block.Block;
 import io.trino.spi.connector.ConnectorPageSource;
@@ -44,7 +43,6 @@ import static com.google.common.collect.Iterables.cycle;
 import static com.google.common.collect.Iterables.limit;
 import static com.google.common.collect.Iterables.transform;
 import static io.trino.hadoop.ConfigurationInstantiator.newEmptyConfiguration;
-import static io.trino.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
 import static io.trino.plugin.hive.HiveTestUtils.getHiveSession;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.TimestampType.createTimestampType;
@@ -96,6 +94,7 @@ public class TestTimestamp
     private static void testRoundTrip(MessageType parquetSchema, Iterable<Long> writeValues, HiveTimestampPrecision timestamp)
             throws Exception
     {
+        DateTimeZone dateTimeZone = DateTimeZone.forID("UTC");
         Iterable<SqlTimestamp> timestampReadValues = transform(writeValues, value -> {
             if (value == null) {
                 return null;
@@ -128,21 +127,17 @@ public class TestTimestamp
                     false,
                     DateTimeZone.getDefault());
 
-            ConnectorSession session = getHiveSession(new HiveConfig(), new ParquetReaderConfig().setOptimizedReaderEnabled(false));
-            testReadingAs(createTimestampType(timestamp.getPrecision()), session, tempFile, columnNames, timestampReadValues);
-            testReadingAs(BIGINT, session, tempFile, columnNames, writeValues);
-
-            session = getHiveSession(new HiveConfig(), new ParquetReaderConfig().setOptimizedReaderEnabled(true));
-            testReadingAs(createTimestampType(timestamp.getPrecision()), session, tempFile, columnNames, timestampReadValues);
-            testReadingAs(BIGINT, session, tempFile, columnNames, writeValues);
+            ConnectorSession session = getHiveSession(new HiveConfig());
+            testReadingAs(createTimestampType(timestamp.getPrecision()), session, tempFile, columnNames, timestampReadValues, dateTimeZone);
+            testReadingAs(BIGINT, session, tempFile, columnNames, writeValues, dateTimeZone);
         }
     }
 
-    private static void testReadingAs(Type type, ConnectorSession session, ParquetTester.TempFile tempFile, List<String> columnNames, Iterable<?> expectedValues)
+    private static void testReadingAs(Type type, ConnectorSession session, ParquetTester.TempFile tempFile, List<String> columnNames, Iterable<?> expectedValues, DateTimeZone dateTimeZone)
              throws IOException
     {
         Iterator<?> expected = expectedValues.iterator();
-        try (ConnectorPageSource pageSource = StandardFileFormats.TRINO_PARQUET.createFileFormatReader(session, HDFS_ENVIRONMENT, tempFile.getFile(), columnNames, ImmutableList.of(type))) {
+        try (ConnectorPageSource pageSource = ParquetUtil.createPageSource(session, tempFile.getFile(), columnNames, ImmutableList.of(type), dateTimeZone)) {
             // skip a page to exercise the decoder's skip() logic
             Page firstPage = pageSource.getNextPage();
             assertTrue(firstPage.getPositionCount() > 0, "Expected first page to have at least 1 row");

@@ -86,6 +86,17 @@ class HdfsFileIterator
                 blocks.isEmpty() ? Optional.empty() : Optional.of(blocks));
     }
 
+    static Location listedLocation(Location listingLocation, Path listingPath, Path listedPath)
+    {
+        String root = listingPath.toUri().getPath();
+        String path = listedPath.toUri().getPath();
+
+        verify(path.startsWith(root), "iterator path [%s] not a child of listing path [%s] for location [%s]", path, root, listingLocation);
+
+        int index = root.endsWith("/") ? root.length() : root.length() + 1;
+        return listingLocation.appendPath(path.substring(index));
+    }
+
     private static Block toTrinoBlock(BlockLocation location)
     {
         try {

@@ -13,7 +13,6 @@
  */
 package io.trino.plugin.hive.orc;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.io.Closer;
 import io.trino.memory.context.AggregatedMemoryContext;
@@ -42,7 +41,6 @@ import io.trino.spi.type.Type;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
 
@@ -70,7 +68,6 @@ public class OrcPageSource
     public static final String ORC_CODEC_METRIC_PREFIX = "OrcReaderCompressionFormat_";
 
     private final OrcRecordReader recordReader;
-    private final List<ColumnAdaptation> columnAdaptations;
     private final OrcDataSource orcDataSource;
     private final Optional<OrcDeletedRows> deletedRows;
 
@@ -91,7 +88,6 @@ public class OrcPageSource
 
     public OrcPageSource(
             OrcRecordReader recordReader,
-            List<ColumnAdaptation> columnAdaptations,
             OrcDataSource orcDataSource,
             Optional<OrcDeletedRows> deletedRows,
             Optional<Long> originalFileRowId,
@@ -100,7 +96,6 @@ public class OrcPageSource
             CompressionKind compressionKind)
     {
         this.recordReader = requireNonNull(recordReader, "recordReader is null");
-        this.columnAdaptations = ImmutableList.copyOf(requireNonNull(columnAdaptations, "columnAdaptations is null"));
         this.orcDataSource = requireNonNull(orcDataSource, "orcDataSource is null");
         this.deletedRows = requireNonNull(deletedRows, "deletedRows is null");
         this.stats = requireNonNull(stats, "stats is null");
@@ -182,19 +177,7 @@ public class OrcPageSource
             }
         }
 
-        MaskDeletedRowsFunction maskDeletedRowsFunction = deletedRows
-                .map(deletedRows -> deletedRows.getMaskDeletedRowsFunction(page, startRowId))
-                .orElseGet(() -> MaskDeletedRowsFunction.noMaskForPage(page));
-        return getColumnAdaptationsPage(page, maskDeletedRowsFunction, recordReader.getFilePosition(), startRowId);
-    }
-
-    private Page getColumnAdaptationsPage(Page page, MaskDeletedRowsFunction maskDeletedRowsFunction, long filePosition, OptionalLong startRowId)
-    {
-        Block[] blocks = new Block[columnAdaptations.size()];
-        for (int i = 0; i < columnAdaptations.size(); i++) {
-            blocks[i] = columnAdaptations.get(i).block(page, maskDeletedRowsFunction, filePosition, startRowId);
-        }
-        return new Page(maskDeletedRowsFunction.getPositionCount(), blocks);
+        return page;
     }
 
     static TrinoException handleException(OrcDataSourceId dataSourceId, Exception exception)
@@ -243,7 +226,6 @@ public class OrcPageSource
     {
         return toStringHelper(this)
                 .add("orcDataSource", orcDataSource.getId())
-                .add("columns", columnAdaptations)
                 .toString();
     }
 

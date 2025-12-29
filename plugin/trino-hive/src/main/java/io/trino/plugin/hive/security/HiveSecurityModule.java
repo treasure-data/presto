@@ -41,20 +41,23 @@ public class HiveSecurityModule
                 LEGACY,
                 combine(
                         new LegacySecurityModule(),
-                        new StaticAccessControlMetadataModule()));
+                        new StaticAccessControlMetadataModule(),
+                        usingSystemSecurity(false)));
         bindSecurityModule(
                 FILE,
                 combine(
                         new FileBasedAccessControlModule(),
-                        new StaticAccessControlMetadataModule()));
+                        new StaticAccessControlMetadataModule(),
+                        usingSystemSecurity(false)));
         bindSecurityModule(
                 READ_ONLY,
                 combine(
                         new ReadOnlySecurityModule(),
-                        new StaticAccessControlMetadataModule()));
-        bindSecurityModule(SQL_STANDARD, new SqlStandardSecurityModule());
-        bindSecurityModule(ALLOW_ALL, new AllowAllSecurityModule());
-        bindSecurityModule(SYSTEM, new SystemSecurityModule());
+                        new StaticAccessControlMetadataModule(),
+                        usingSystemSecurity(false)));
+        bindSecurityModule(SQL_STANDARD, combine(new SqlStandardSecurityModule(), usingSystemSecurity(false)));
+        bindSecurityModule(ALLOW_ALL, combine(new AllowAllSecurityModule(), usingSystemSecurity(false)));
+        bindSecurityModule(SYSTEM, combine(new SystemSecurityModule(), usingSystemSecurity(true)));
     }
 
     private void bindSecurityModule(String name, Module module)
@@ -63,6 +66,11 @@ public class HiveSecurityModule
                 SecurityConfig.class,
                 security -> name.equalsIgnoreCase(security.getSecuritySystem()),
                 module));
+    }
+
+    private static Module usingSystemSecurity(boolean system)
+    {
+        return binder -> binder.bind(boolean.class).annotatedWith(UsingSystemSecurity.class).toInstance(system);
     }
 
     private static class StaticAccessControlMetadataModule

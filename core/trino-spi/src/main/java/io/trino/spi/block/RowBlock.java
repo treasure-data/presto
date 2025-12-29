@@ -15,13 +15,15 @@ package io.trino.spi.block;
 
 import jakarta.annotation.Nullable;
 
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 import java.util.function.ObjLongConsumer;
+import java.util.stream.IntStream;
 
 import static io.airlift.slice.SizeOf.instanceSize;
 import static io.airlift.slice.SizeOf.sizeOf;
-import static io.trino.spi.block.BlockUtil.copyIsNullAndAppendNull;
-import static io.trino.spi.block.BlockUtil.copyOffsetsAndAppendNull;
+import static io.trino.spi.block.BlockUtil.checkArrayRange;
 import static io.trino.spi.block.BlockUtil.ensureBlocksAreLoaded;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -31,15 +33,23 @@ public class RowBlock
 {
     private static final int INSTANCE_SIZE = instanceSize(RowBlock.class);
 
-    private final int startOffset;
     private final int positionCount;
 
     private final boolean[] rowIsNull;
     private final int[] fieldBlockOffsets;
     private final Block[] fieldBlocks;
+    private final List<Block> fieldBlocksList;
 
     private volatile long sizeInBytes = -1;
     private final long retainedSizeInBytes;
+
+    /**
+     * Create a row block directly from field blocks. The returned RowBlock will not contain any null rows, although the fields may contain null values.
+     */
+    public static RowBlock fromFieldBlocks(int positionCount, Block[] fieldBlocks)
+    {
+        return createRowBlockInternal(positionCount, null, fieldBlocks);
+    }
 
     /**
      * Create a row block directly from columnar nulls and field blocks.
@@ -47,61 +57,66 @@ public class RowBlock
     public static Block fromFieldBlocks(int positionCount, Optional<boolean[]> rowIsNullOptional, Block[] fieldBlocks)
     {
         boolean[] rowIsNull = rowIsNullOptional.orElse(null);
-        int[] fieldBlockOffsets = null;
+        validateConstructorArguments(positionCount, rowIsNull, fieldBlocks);
+        return new RowBlock(positionCount, rowIsNull, fieldBlocks);
+    }
+
+    /**
+     * Create a row block directly from field blocks that are not null-suppressed. The field value of a null row must be null.
+     */
+    public static RowBlock fromNotNullSuppressedFieldBlocks(int positionCount, Optional<boolean[]> rowIsNullOptional, Block[] fieldBlocks)
+    {
+        // verify that field values for null rows are null
+        boolean[] rowIsNull = rowIsNullOptional.orElse(null);
         if (rowIsNull != null) {
-            // Check for nulls when computing field block offsets
-            fieldBlockOffsets = new int[positionCount + 1];
-            fieldBlockOffsets[0] = 0;
-            for (int position = 0; position < positionCount; position++) {
-                fieldBlockOffsets[position + 1] = fieldBlockOffsets[position] + (rowIsNull[position] ? 0 : 1);
-            }
-            // fieldBlockOffsets is positionCount + 1 in length
-            if (fieldBlockOffsets[positionCount] == positionCount) {
-                // No nulls encountered, discard the null mask
-                rowIsNull = null;
-                fieldBlockOffsets = null;
+            checkArrayRange(rowIsNull, 0, positionCount);
+
+            for (int fieldIndex = 0; fieldIndex < fieldBlocks.length; fieldIndex++) {
+                Block field = fieldBlocks[fieldIndex];
+                // LazyBlock may not have loaded the field yet
+                if (!(field instanceof LazyBlock lazyBlock) || lazyBlock.isLoaded()) {
+                    for (int position = 0; position < positionCount; position++) {
+                        if (rowIsNull[position] && !field.isNull(position)) {
+                            throw new IllegalArgumentException(format("Field value for null row must be null: field %s, position %s", fieldIndex, position));
+                        }
+                    }
+                }
             }
         }
-
-        validateConstructorArguments(0, positionCount, rowIsNull, fieldBlockOffsets, fieldBlocks);
-        return new RowBlock(0, positionCount, rowIsNull, fieldBlockOffsets, fieldBlocks);
+        return createRowBlockInternal(positionCount, rowIsNull, fieldBlocks);
     }
 
     /**
      * Create a row block directly without per element validations.
      */
-    static RowBlock createRowBlockInternal(int startOffset, int positionCount, @Nullable boolean[] rowIsNull, @Nullable int[] fieldBlockOffsets, Block[] fieldBlocks)
+    static RowBlock createRowBlockInternal(int positionCount, @Nullable boolean[] rowIsNull, Block[] fieldBlocks)
     {
-        validateConstructorArguments(startOffset, positionCount, rowIsNull, fieldBlockOffsets, fieldBlocks);
-        return new RowBlock(startOffset, positionCount, rowIsNull, fieldBlockOffsets, fieldBlocks);
+        validateConstructorArguments(positionCount, rowIsNull, fieldBlocks);
+        return new RowBlock(positionCount, rowIsNull, fieldBlocks);
     }
 
-    private static void validateConstructorArguments(int startOffset, int positionCount, @Nullable boolean[] rowIsNull, @Nullable int[] fieldBlockOffsets, Block[] fieldBlocks)
+    private static void validateConstructorArguments(int positionCount, @Nullable boolean[] rowIsNull, Block[] fieldBlocks)
     {
-        if (startOffset < 0) {
-            throw new IllegalArgumentException("arrayOffset is negative");
-        }
-
         if (positionCount < 0) {
             throw new IllegalArgumentException("positionCount is negative");
         }
 
-        if (rowIsNull != null && rowIsNull.length - startOffset < positionCount) {
+        if (rowIsNull != null && rowIsNull.length < positionCount) {
             throw new IllegalArgumentException("rowIsNull length is less than positionCount");
-        }
-
-        if ((rowIsNull == null) != (fieldBlockOffsets == null)) {
-            throw new IllegalArgumentException("When rowIsNull is (non) null then fieldBlockOffsets should be (non) null as well");
-        }
-
-        if (fieldBlockOffsets != null && fieldBlockOffsets.length - startOffset < positionCount + 1) {
-            throw new IllegalArgumentException("fieldBlockOffsets length is less than positionCount");
         }
 
         requireNonNull(fieldBlocks, "fieldBlocks is null");
 
         if (fieldBlocks.length <= 0) {
             throw new IllegalArgumentException("Number of fields in RowBlock must be positive");
+        }
+
+        if (rowIsNull != null) {
+            for (Block field : fieldBlocks) {
+                if (field.getPositionCount() < positionCount) {
+                    throw new IllegalArgumentException("Sparse RowBlock is not supported");
+                }
+            }
         }
 
         int firstFieldBlockPositionCount = fieldBlocks[0].getPositionCount();
@@ -116,15 +131,15 @@ public class RowBlock
      * Use createRowBlockInternal or fromFieldBlocks instead of this method.  The caller of this method is assumed to have
      * validated the arguments with validateConstructorArguments.
      */
-    private RowBlock(int startOffset, int positionCount, @Nullable boolean[] rowIsNull, @Nullable int[] fieldBlockOffsets, Block[] fieldBlocks)
+    private RowBlock(int positionCount, @Nullable boolean[] rowIsNull, Block[] fieldBlocks)
     {
         super(fieldBlocks.length);
 
-        this.startOffset = startOffset;
         this.positionCount = positionCount;
-        this.rowIsNull = rowIsNull;
-        this.fieldBlockOffsets = fieldBlockOffsets;
+        this.rowIsNull = positionCount == 0 ? null : rowIsNull;
+        this.fieldBlockOffsets = IntStream.range(0, positionCount + 1).toArray();
         this.fieldBlocks = fieldBlocks;
+        this.fieldBlocksList = List.of(fieldBlocks);
 
         this.retainedSizeInBytes = INSTANCE_SIZE + sizeOf(fieldBlockOffsets) + sizeOf(rowIsNull);
     }
@@ -135,17 +150,9 @@ public class RowBlock
         return fieldBlocks;
     }
 
-    @Override
-    @Nullable
-    protected int[] getFieldBlockOffsets()
+    public Block getFieldBlock(int fieldIndex)
     {
-        return fieldBlockOffsets;
-    }
-
-    @Override
-    protected int getOffsetBase()
-    {
-        return startOffset;
+        return fieldBlocks[fieldIndex];
     }
 
     @Override
@@ -177,12 +184,8 @@ public class RowBlock
         long sizeInBytes = getBaseSizeInBytes();
         boolean hasUnloadedBlocks = false;
 
-        int startFieldBlockOffset = fieldBlockOffsets != null ? fieldBlockOffsets[startOffset] : startOffset;
-        int endFieldBlockOffset = fieldBlockOffsets != null ? fieldBlockOffsets[startOffset + positionCount] : startOffset + positionCount;
-        int fieldBlockLength = endFieldBlockOffset - startFieldBlockOffset;
-
         for (Block fieldBlock : fieldBlocks) {
-            sizeInBytes += fieldBlock.getRegionSizeInBytes(startFieldBlockOffset, fieldBlockLength);
+            sizeInBytes += fieldBlock.getSizeInBytes();
             hasUnloadedBlocks = hasUnloadedBlocks || !fieldBlock.isLoaded();
         }
 
@@ -205,6 +208,12 @@ public class RowBlock
             retainedSizeInBytes += fieldBlock.getRetainedSizeInBytes();
         }
         return retainedSizeInBytes;
+    }
+
+    @Override
+    public Block getPositions(int[] retainedPositions, int offset, int length)
+    {
+        return copyPositions(retainedPositions, offset, length);
     }
 
     @Override
@@ -248,35 +257,116 @@ public class RowBlock
             return this;
         }
         return createRowBlockInternal(
-                startOffset,
                 positionCount,
                 rowIsNull,
-                fieldBlockOffsets,
                 loadedFieldBlocks);
     }
 
     @Override
     public Block copyWithAppendedNull()
     {
-        boolean[] newRowIsNull = copyIsNullAndAppendNull(getRowIsNull(), getOffsetBase(), getPositionCount());
-
-        int[] newOffsets;
-        if (getFieldBlockOffsets() == null) {
-            int desiredLength = getOffsetBase() + positionCount + 2;
-            newOffsets = new int[desiredLength];
-            newOffsets[getOffsetBase()] = getOffsetBase();
-            for (int position = getOffsetBase(); position < getOffsetBase() + positionCount; position++) {
-                // Since there are no nulls in the original array, new offsets are the same as previous ones
-                newOffsets[position + 1] = newOffsets[position] + 1;
-            }
-
-            // Null does not change offset
-            newOffsets[desiredLength - 1] = newOffsets[desiredLength - 2];
+        boolean[] newRowIsNull;
+        if (rowIsNull != null) {
+            newRowIsNull = Arrays.copyOf(rowIsNull, positionCount + 1);
         }
         else {
-            newOffsets = copyOffsetsAndAppendNull(getFieldBlockOffsets(), getOffsetBase(), getPositionCount());
+            newRowIsNull = new boolean[positionCount + 1];
+        }
+        // mark the (new) last element as null
+        newRowIsNull[positionCount] = true;
+
+        Block[] newBlocks = new Block[fieldBlocks.length];
+        for (int i = 0; i < fieldBlocks.length; i++) {
+            newBlocks[i] = fieldBlocks[i].copyWithAppendedNull();
+        }
+        return new RowBlock(positionCount + 1, newRowIsNull, newBlocks);
+    }
+
+    /**
+     * Returns the row fields from the specified block. The block maybe a LazyBlock, RunLengthEncodedBlock, or
+     * DictionaryBlock, but the underlying block must be a RowBlock. The returned field blocks will be the same
+     * length as the specified block, which means they are not null suppressed.
+     */
+    public static List<Block> getRowFieldsFromBlock(Block block)
+    {
+        // if the block is lazy, be careful to not materialize the nested blocks
+        if (block instanceof LazyBlock lazyBlock) {
+            block = lazyBlock.getBlock();
         }
 
-        return createRowBlockInternal(getOffsetBase(), getPositionCount() + 1, newRowIsNull, newOffsets, getRawFieldBlocks());
+        if (block instanceof RunLengthEncodedBlock runLengthEncodedBlock) {
+            RowBlock rowBlock = (RowBlock) runLengthEncodedBlock.getValue();
+            return rowBlock.fieldBlocksList.stream()
+                    .map(fieldBlock -> RunLengthEncodedBlock.create(fieldBlock, runLengthEncodedBlock.getPositionCount()))
+                    .toList();
+        }
+        if (block instanceof DictionaryBlock dictionaryBlock) {
+            RowBlock rowBlock = (RowBlock) dictionaryBlock.getDictionary();
+            return rowBlock.fieldBlocksList.stream()
+                    .map(dictionaryBlock::createProjection)
+                    .toList();
+        }
+        if (block instanceof RowBlock rowBlock) {
+            return List.of(rowBlock.fieldBlocks);
+        }
+        throw new IllegalArgumentException("Unexpected block type: " + block.getClass().getSimpleName());
+    }
+
+    /**
+     * Returns the row fields from the specified block with null rows suppressed. The block maybe a LazyBlock, RunLengthEncodedBlock, or
+     * DictionaryBlock, but the underlying block must be a RowBlock. The returned field blocks will not be the same
+     * length as the specified block if it contains null rows.
+     */
+    public static List<Block> getNullSuppressedRowFieldsFromBlock(Block block)
+    {
+        // if the block is lazy, be careful to not materialize the nested blocks
+        if (block instanceof LazyBlock lazyBlock) {
+            block = lazyBlock.getBlock();
+        }
+
+        if (!block.mayHaveNull()) {
+            return getRowFieldsFromBlock(block);
+        }
+
+        if (block instanceof RunLengthEncodedBlock runLengthEncodedBlock) {
+            RowBlock rowBlock = (RowBlock) runLengthEncodedBlock.getValue();
+            if (!rowBlock.isNull(0)) {
+                throw new IllegalStateException("Expected run length encoded block value to be null");
+            }
+            // all values are null, so return a zero-length block of the correct type
+            return rowBlock.fieldBlocksList.stream()
+                    .map(fieldBlock -> fieldBlock.getRegion(0, 0))
+                    .toList();
+        }
+        if (block instanceof DictionaryBlock dictionaryBlock) {
+            int[] newIds = new int[dictionaryBlock.getPositionCount()];
+            int idCount = 0;
+            for (int position = 0; position < newIds.length; position++) {
+                if (!dictionaryBlock.isNull(position)) {
+                    newIds[idCount] = dictionaryBlock.getId(position);
+                    idCount++;
+                }
+            }
+            int nonNullPositionCount = idCount;
+            RowBlock rowBlock = (RowBlock) dictionaryBlock.getDictionary();
+            return rowBlock.fieldBlocksList.stream()
+                    .map(field -> DictionaryBlock.create(nonNullPositionCount, field, newIds))
+                    .toList();
+        }
+        if (block instanceof RowBlock rowBlock) {
+            int[] nonNullPositions = new int[rowBlock.getPositionCount()];
+            int idCount = 0;
+            for (int position = 0; position < nonNullPositions.length; position++) {
+                if (!rowBlock.isNull(position)) {
+                    nonNullPositions[idCount] = position;
+                    idCount++;
+                }
+            }
+            int nonNullPositionCount = idCount;
+            return rowBlock.fieldBlocksList.stream()
+                    .map(field -> DictionaryBlock.create(nonNullPositionCount, field, nonNullPositions))
+                    .toList();
+        }
+        throw new IllegalArgumentException("Unexpected block type: " + block.getClass().getSimpleName());
     }
 }

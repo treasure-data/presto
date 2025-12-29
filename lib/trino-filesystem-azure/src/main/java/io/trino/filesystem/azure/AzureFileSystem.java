@@ -33,10 +33,12 @@ import com.azure.storage.file.datalake.models.DataLakeStorageException;
 import com.azure.storage.file.datalake.models.ListPathsOptions;
 import com.azure.storage.file.datalake.models.PathItem;
 import com.azure.storage.file.datalake.options.DataLakePathDeleteOptions;
+import com.google.common.collect.ImmutableSet;
 import io.airlift.units.DataSize;
 import io.trino.filesystem.FileIterator;
 import io.trino.filesystem.Location;
 import io.trino.filesystem.TrinoFileSystem;
+import io.trino.filesystem.TrinoFileSystemException;
 import io.trino.filesystem.TrinoInputFile;
 import io.trino.filesystem.TrinoOutputFile;
 
@@ -44,12 +46,15 @@ import java.io.IOException;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 
 import static com.azure.storage.common.implementation.Constants.HeaderConstants.ETAG_WILDCARD;
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.trino.filesystem.azure.AzureUtils.handleAzureException;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
+import static java.util.UUID.randomUUID;
 import static java.util.function.Predicate.not;
 
 public class AzureFileSystem
@@ -299,6 +304,105 @@ public class AzureFileSystem
         }
     }
 
+    @Override
+    public void createDirectory(Location location)
+            throws IOException
+    {
+        AzureLocation azureLocation = new AzureLocation(location);
+        if (!isHierarchicalNamespaceEnabled(azureLocation)) {
+            return;
+        }
+        try {
+            DataLakeFileSystemClient fileSystemClient = createFileSystemClient(azureLocation);
+            DataLakeDirectoryClient directoryClient = createDirectoryIfNotExists(fileSystemClient, azureLocation.path());
+            if (!directoryClient.getProperties().isDirectory()) {
+                throw new TrinoFileSystemException("Location is not a directory: " + azureLocation);
+            }
+        }
+        catch (RuntimeException e) {
+            throw handleAzureException(e, "creating directory", azureLocation);
+        }
+    }
+
+    @Override
+    public void renameDirectory(Location source, Location target)
+            throws IOException
+    {
+        AzureLocation sourceLocation = new AzureLocation(source);
+        AzureLocation targetLocation = new AzureLocation(target);
+        if (!sourceLocation.account().equals(targetLocation.account())) {
+            throw new TrinoFileSystemException("Cannot rename across storage accounts");
+        }
+        if (!Objects.equals(sourceLocation.container(), targetLocation.container())) {
+            throw new TrinoFileSystemException("Cannot rename across storage account containers");
+        }
+        if (!isHierarchicalNamespaceEnabled(sourceLocation)) {
+            throw new TrinoFileSystemException("Azure non-hierarchical does not support directory renames");
+        }
+        if (sourceLocation.path().isEmpty() || targetLocation.path().isEmpty()) {
+            throw new TrinoFileSystemException("Cannot rename %s to %s".formatted(source, target));
+        }
+
+        try {
+            DataLakeFileSystemClient fileSystemClient = createFileSystemClient(sourceLocation);
+            DataLakeDirectoryClient directoryClient = createDirectoryClient(fileSystemClient, sourceLocation.path());
+            if (!directoryClient.exists()) {
+                throw new TrinoFileSystemException("Source directory does not exist: " + source);
+            }
+            if (!directoryClient.getProperties().isDirectory()) {
+                throw new TrinoFileSystemException("Source is not a directory: " + source);
+            }
+            directoryClient.rename(null, targetLocation.path());
+        }
+        catch (RuntimeException e) {
+            throw new IOException("Rename directory from %s to %s failed".formatted(source, target), e);
+        }
+    }
+
+    @Override
+    public Set<Location> listDirectories(Location location)
+            throws IOException
+    {
+        AzureLocation azureLocation = new AzureLocation(location);
+        try {
+            // blob API returns directories as blobs, so it cannot be used when Gen2 is enabled
+            return isHierarchicalNamespaceEnabled(azureLocation)
+                    ? listGen2Directories(azureLocation)
+                    : listBlobDirectories(azureLocation);
+        }
+        catch (RuntimeException e) {
+            throw handleAzureException(e, "listing files", azureLocation);
+        }
+    }
+
+    @Override
+    public Optional<Location> createTemporaryDirectory(Location targetPath, String temporaryPrefix, String relativePrefix)
+            throws IOException
+    {
+        AzureLocation azureLocation = new AzureLocation(targetPath);
+        if (!isHierarchicalNamespaceEnabled(azureLocation)) {
+            return Optional.empty();
+        }
+
+        // allow for absolute or relative temporary prefix
+        Location temporary;
+        if (temporaryPrefix.startsWith("/")) {
+            String prefix = temporaryPrefix;
+            while (prefix.startsWith("/")) {
+                prefix = prefix.substring(1);
+            }
+            temporary = azureLocation.baseLocation().appendPath(prefix);
+        }
+        else {
+            temporary = targetPath.appendPath(temporaryPrefix);
+        }
+
+        temporary = temporary.appendPath(randomUUID().toString());
+
+        createDirectory(temporary);
+        return Optional.of(temporary);
+    }
+
     private boolean isHierarchicalNamespaceEnabled(AzureLocation location)
             throws IOException
     {
@@ -333,6 +437,41 @@ public class AzureFileSystem
         return builder.buildClient();
     }
 
+    private Set<Location> listGen2Directories(AzureLocation location)
+            throws IOException
+    {
+        DataLakeFileSystemClient fileSystemClient = createFileSystemClient(location);
+        PagedIterable<PathItem> pathItems;
+        if (location.path().isEmpty()) {
+            pathItems = fileSystemClient.listPaths();
+        }
+        else {
+            DataLakeDirectoryClient directoryClient = createDirectoryClient(fileSystemClient, location.path());
+            if (!directoryClient.exists()) {
+                return ImmutableSet.of();
+            }
+            if (!directoryClient.getProperties().isDirectory()) {
+                throw new TrinoFileSystemException("Location is not a directory: " + location);
+            }
+            pathItems = directoryClient.listPaths(false, false, null, null);
+        }
+        Location baseLocation = location.baseLocation();
+        return pathItems.stream()
+                .filter(PathItem::isDirectory)
+                .map(item -> baseLocation.appendPath(item.getName() + "/"))
+                .collect(toImmutableSet());
+    }
+
+    private Set<Location> listBlobDirectories(AzureLocation location)
+    {
+        Location baseLocation = location.baseLocation();
+        return createBlobContainerClient(location)
+                .listBlobsByHierarchy(location.directoryPath()).stream()
+                .filter(BlobItem::isPrefix)
+                .map(item -> baseLocation.appendPath(item.getName()))
+                .collect(toImmutableSet());
+    }
+
     private DataLakeFileSystemClient createFileSystemClient(AzureLocation location)
     {
         requireNonNull(location, "location is null");
@@ -347,5 +486,15 @@ public class AzureFileSystem
             throw new IllegalArgumentException();
         }
         return fileSystemClient;
+    }
+
+    private static DataLakeDirectoryClient createDirectoryClient(DataLakeFileSystemClient fileSystemClient, String directoryName)
+    {
+        return fileSystemClient.getDirectoryClient(directoryName);
+    }
+
+    private static DataLakeDirectoryClient createDirectoryIfNotExists(DataLakeFileSystemClient fileSystemClient, String name)
+    {
+        return fileSystemClient.createDirectoryIfNotExists(name);
     }
 }

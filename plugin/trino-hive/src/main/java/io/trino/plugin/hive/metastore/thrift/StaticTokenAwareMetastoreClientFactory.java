@@ -76,7 +76,6 @@ public class StaticTokenAwareMetastoreClientFactory
         checkArgument(!metastoreUris.isEmpty(), "metastoreUris must specify at least one URI");
         this.backoffs = metastoreUris.stream()
                 .map(StaticTokenAwareMetastoreClientFactory::checkMetastoreUri)
-                .map(uri -> HostAndPort.fromParts(uri.getHost(), uri.getPort()))
                 .map(address -> new Backoff(address, ticker))
                 .collect(toImmutableList());
 
@@ -105,7 +104,7 @@ public class StaticTokenAwareMetastoreClientFactory
         TException lastException = null;
         for (Backoff backoff : backoffsSorted) {
             try {
-                return getClient(backoff.getAddress(), backoff, delegationToken);
+                return getClient(backoff.getUri(), backoff, delegationToken);
             }
             catch (TException e) {
                 lastException = e;
@@ -116,7 +115,7 @@ public class StaticTokenAwareMetastoreClientFactory
         throw new TException("Failed connecting to Hive metastore: " + addresses, lastException);
     }
 
-    private ThriftMetastoreClient getClient(HostAndPort address, Backoff backoff, Optional<String> delegationToken)
+    private ThriftMetastoreClient getClient(URI address, Backoff backoff, Optional<String> delegationToken)
             throws TException
     {
         ThriftMetastoreClient client = new FailureAwareThriftMetastoreClient(clientFactory.create(address, delegationToken), new Callback()
@@ -156,20 +155,25 @@ public class StaticTokenAwareMetastoreClientFactory
         static final long MIN_BACKOFF = new Duration(50, MILLISECONDS).roundTo(NANOSECONDS);
         static final long MAX_BACKOFF = new Duration(60, SECONDS).roundTo(NANOSECONDS);
 
-        private final HostAndPort address;
+        private final URI uri;
         private final Ticker ticker;
         private long backoffDuration = MIN_BACKOFF;
         private OptionalLong lastFailureTimestamp = OptionalLong.empty();
 
-        Backoff(HostAndPort address, Ticker ticker)
+        Backoff(URI address, Ticker ticker)
         {
-            this.address = requireNonNull(address, "address is null");
+            this.uri = requireNonNull(address, "address is null");
             this.ticker = requireNonNull(ticker, "ticker is null");
+        }
+
+        public URI getUri()
+        {
+            return uri;
         }
 
         public HostAndPort getAddress()
         {
-            return address;
+            return HostAndPort.fromParts(uri.getHost(), uri.getPort());
         }
 
         synchronized void fail()

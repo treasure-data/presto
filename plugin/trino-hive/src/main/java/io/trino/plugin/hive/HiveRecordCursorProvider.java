@@ -21,8 +21,8 @@ import io.trino.spi.type.TypeManager;
 import org.apache.hadoop.conf.Configuration;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.Properties;
 
 import static java.util.Objects.requireNonNull;
 
@@ -35,7 +35,7 @@ public interface HiveRecordCursorProvider
             long start,
             long length,
             long fileSize,
-            Properties schema,
+            Map<String, String> schema,
             List<HiveColumnHandle> columns,
             TupleDomain<HiveColumnHandle> effectivePredicate,
             TypeManager typeManager,

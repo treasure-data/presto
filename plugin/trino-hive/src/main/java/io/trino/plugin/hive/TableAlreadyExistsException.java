@@ -26,12 +26,17 @@ public class TableAlreadyExistsException
 
     public TableAlreadyExistsException(SchemaTableName tableName)
     {
-        this(tableName, format("Table already exists: '%s'", tableName));
+        this(tableName, (Throwable) null);
     }
 
     public TableAlreadyExistsException(SchemaTableName tableName, String message)
     {
         this(tableName, message, null);
+    }
+
+    public TableAlreadyExistsException(SchemaTableName tableName, Throwable cause)
+    {
+        this(tableName, format("Table already exists: '%s'", tableName), cause);
     }
 
     public TableAlreadyExistsException(SchemaTableName tableName, String message, Throwable cause)

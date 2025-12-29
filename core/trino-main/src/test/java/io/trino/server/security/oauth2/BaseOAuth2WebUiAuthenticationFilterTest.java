@@ -145,8 +145,10 @@ public abstract class BaseOAuth2WebUiAuthenticationFilterTest
                 server,
                 hydraIdP,
                 () -> {
-                    httpClient.dispatcher().executorService().shutdown();
-                    httpClient.connectionPool().evictAll();
+                    if (httpClient != null) {
+                        httpClient.dispatcher().executorService().shutdown();
+                        httpClient.connectionPool().evictAll();
+                    }
                 });
         server = null;
         hydraIdP = null;

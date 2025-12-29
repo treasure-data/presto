@@ -26,7 +26,6 @@ import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
-import static java.util.stream.Collectors.toList;
 
 public class HiveBucketHandle
 {
@@ -83,17 +82,6 @@ public class HiveBucketHandle
     public List<SortingColumn> getSortedBy()
     {
         return sortedBy;
-    }
-
-    public HiveBucketProperty toTableBucketProperty()
-    {
-        return new HiveBucketProperty(
-                columns.stream()
-                        .map(HiveColumnHandle::getName)
-                        .collect(toList()),
-                bucketingVersion,
-                tableBucketCount,
-                sortedBy);
     }
 
     @Override

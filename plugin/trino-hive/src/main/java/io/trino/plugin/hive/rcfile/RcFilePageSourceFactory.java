@@ -14,7 +14,6 @@
 package io.trino.plugin.hive.rcfile;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Maps;
 import com.google.inject.Inject;
 import io.airlift.slice.Slices;
 import io.airlift.units.DataSize;
@@ -31,14 +30,13 @@ import io.trino.hive.formats.encodings.text.TextColumnEncodingFactory;
 import io.trino.hive.formats.encodings.text.TextEncodingOptions;
 import io.trino.hive.formats.rcfile.RcFileReader;
 import io.trino.plugin.hive.AcidInfo;
-import io.trino.plugin.hive.FileFormatDataSourceStats;
 import io.trino.plugin.hive.HiveColumnHandle;
 import io.trino.plugin.hive.HiveConfig;
 import io.trino.plugin.hive.HivePageSourceFactory;
 import io.trino.plugin.hive.ReaderColumns;
 import io.trino.plugin.hive.ReaderPageSource;
+import io.trino.plugin.hive.Schema;
 import io.trino.plugin.hive.acid.AcidTransaction;
-import io.trino.plugin.hive.fs.MonitoredInputFile;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ConnectorPageSource;
 import io.trino.spi.connector.ConnectorSession;
@@ -51,7 +49,6 @@ import java.io.InputStream;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.Properties;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -61,9 +58,7 @@ import static io.trino.plugin.hive.HivePageSourceProvider.projectBaseColumns;
 import static io.trino.plugin.hive.ReaderPageSource.noProjectionAdaptation;
 import static io.trino.plugin.hive.util.HiveClassNames.COLUMNAR_SERDE_CLASS;
 import static io.trino.plugin.hive.util.HiveClassNames.LAZY_BINARY_COLUMNAR_SERDE_CLASS;
-import static io.trino.plugin.hive.util.HiveUtil.getDeserializerClassName;
 import static io.trino.plugin.hive.util.HiveUtil.splitError;
-import static io.trino.plugin.hive.util.SerdeConstants.SERIALIZATION_LIB;
 import static java.lang.Math.min;
 import static java.util.Objects.requireNonNull;
 
@@ -73,25 +68,18 @@ public class RcFilePageSourceFactory
     private static final DataSize BUFFER_SIZE = DataSize.of(8, Unit.MEGABYTE);
 
     private final TrinoFileSystemFactory fileSystemFactory;
-    private final FileFormatDataSourceStats stats;
     private final DateTimeZone timeZone;
 
     @Inject
-    public RcFilePageSourceFactory(TrinoFileSystemFactory fileSystemFactory, FileFormatDataSourceStats stats, HiveConfig hiveConfig)
+    public RcFilePageSourceFactory(TrinoFileSystemFactory fileSystemFactory, HiveConfig hiveConfig)
     {
         this.fileSystemFactory = requireNonNull(fileSystemFactory, "fileSystemFactory is null");
-        this.stats = requireNonNull(stats, "stats is null");
         this.timeZone = hiveConfig.getRcfileDateTimeZone();
     }
 
-    public static Properties stripUnnecessaryProperties(Properties schema)
+    public static boolean stripUnnecessaryProperties(String serializationLibraryName)
     {
-        if (LAZY_BINARY_COLUMNAR_SERDE_CLASS.equals(getDeserializerClassName(schema))) {
-            Properties stripped = new Properties();
-            stripped.put(SERIALIZATION_LIB, schema.getProperty(SERIALIZATION_LIB));
-            return stripped;
-        }
-        return schema;
+        return LAZY_BINARY_COLUMNAR_SERDE_CLASS.equals(serializationLibraryName);
     }
 
     @Override
@@ -101,7 +89,8 @@ public class RcFilePageSourceFactory
             long start,
             long length,
             long estimatedFileSize,
-            Properties schema,
+            long fileModifiedTime,
+            Schema schema,
             List<HiveColumnHandle> columns,
             TupleDomain<HiveColumnHandle> effectivePredicate,
             Optional<AcidInfo> acidInfo,
@@ -110,12 +99,12 @@ public class RcFilePageSourceFactory
             AcidTransaction transaction)
     {
         ColumnEncodingFactory columnEncodingFactory;
-        String deserializerClassName = getDeserializerClassName(schema);
+        String deserializerClassName = schema.serializationLibraryName();
         if (deserializerClassName.equals(LAZY_BINARY_COLUMNAR_SERDE_CLASS)) {
             columnEncodingFactory = new BinaryColumnEncodingFactory(timeZone);
         }
         else if (deserializerClassName.equals(COLUMNAR_SERDE_CLASS)) {
-            columnEncodingFactory = new TextColumnEncodingFactory(TextEncodingOptions.fromSchema(Maps.fromProperties(schema)));
+            columnEncodingFactory = new TextColumnEncodingFactory(TextEncodingOptions.fromSchema(schema.serdeProperties()));
         }
         else {
             return Optional.empty();
@@ -133,7 +122,7 @@ public class RcFilePageSourceFactory
         }
 
         TrinoFileSystem trinoFileSystem = fileSystemFactory.create(session.getIdentity());
-        TrinoInputFile inputFile = new MonitoredInputFile(stats, trinoFileSystem.newInputFile(path));
+        TrinoInputFile inputFile = trinoFileSystem.newInputFile(path);
         try {
             length = min(inputFile.length() - start, length);
             if (!inputFile.exists()) {

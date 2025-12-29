@@ -89,7 +89,7 @@ public class TestHivePlans
     protected LocalQueryRunner createQueryRunner(Session session, HiveMetastore metastore)
     {
         LocalQueryRunner queryRunner = LocalQueryRunner.create(session);
-        queryRunner.createCatalog(HIVE_CATALOG_NAME, new TestingHiveConnectorFactory(metastore), Map.of("hive.max-partitions-for-eager-load", "5"));
+        queryRunner.createCatalog(HIVE_CATALOG_NAME, new TestingHiveConnectorFactory(baseDir.toPath(), Optional.of(metastore)), Map.of("hive.max-partitions-for-eager-load", "5"));
         return queryRunner;
     }
 

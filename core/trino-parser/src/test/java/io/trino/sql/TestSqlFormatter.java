@@ -16,6 +16,7 @@ package io.trino.sql;
 import com.google.common.collect.ImmutableList;
 import io.trino.sql.tree.AddColumn;
 import io.trino.sql.tree.AllColumns;
+import io.trino.sql.tree.BooleanLiteral;
 import io.trino.sql.tree.ColumnDefinition;
 import io.trino.sql.tree.Comment;
 import io.trino.sql.tree.CreateCatalog;
@@ -27,6 +28,8 @@ import io.trino.sql.tree.ExecuteImmediate;
 import io.trino.sql.tree.GenericDataType;
 import io.trino.sql.tree.Identifier;
 import io.trino.sql.tree.LongLiteral;
+import io.trino.sql.tree.Merge;
+import io.trino.sql.tree.MergeDelete;
 import io.trino.sql.tree.NodeLocation;
 import io.trino.sql.tree.QualifiedName;
 import io.trino.sql.tree.Query;
@@ -37,11 +40,13 @@ import io.trino.sql.tree.ShowSchemas;
 import io.trino.sql.tree.ShowSession;
 import io.trino.sql.tree.ShowTables;
 import io.trino.sql.tree.StringLiteral;
+import io.trino.sql.tree.Table;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
 import java.util.function.BiFunction;
 
+import static io.trino.sql.QueryUtil.aliased;
 import static io.trino.sql.QueryUtil.selectList;
 import static io.trino.sql.QueryUtil.simpleQuery;
 import static io.trino.sql.QueryUtil.table;
@@ -451,5 +456,34 @@ public class TestSqlFormatter
                         ImmutableList.of())))
                 .isEqualTo("EXECUTE IMMEDIATE\n" +
                         "'SELECT * FROM foo WHERE col1 = ''攻殻機動隊'''");
+    }
+
+    @Test
+    void testMerge()
+    {
+        assertThat(formatSql(new Merge(
+                new NodeLocation(1, 1),
+                new Table(new NodeLocation(1, 1), QualifiedName.of("t")),
+                table(QualifiedName.of("changes")),
+                new BooleanLiteral(new NodeLocation(1, 1), "true"),
+                ImmutableList.of(new MergeDelete(new NodeLocation(1, 1), Optional.empty())))))
+                .isEqualTo("MERGE INTO t\n" +
+                        "   USING changes\n" +
+                        "   ON true\n" +
+                        "WHEN MATCHED\n" +
+                        "   THEN DELETE");
+
+        // with alias for the source table
+        assertThat(formatSql(new Merge(
+                new NodeLocation(1, 1),
+                new Table(new NodeLocation(1, 1), QualifiedName.of("t")),
+                aliased(table(QualifiedName.of("changes")), "s"),
+                new BooleanLiteral(new NodeLocation(1, 1), "true"),
+                ImmutableList.of(new MergeDelete(new NodeLocation(1, 1), Optional.empty())))))
+                .isEqualTo("MERGE INTO t\n" +
+                        "   USING changes s\n" +
+                        "   ON true\n" +
+                        "WHEN MATCHED\n" +
+                        "   THEN DELETE");
     }
 }

@@ -1056,7 +1056,12 @@ public final class SqlFormatter
 
             append(indent + 1, "USING ");
 
-            processRelation(node.getSource(), indent + 2);
+            if (node.getSource() instanceof Table) {
+                builder.append(formatName(((Table) node.getSource()).getName()));
+            }
+            else {
+                processRelation(node.getSource(), indent + 2);
+            }
 
             builder.append("\n");
             append(indent + 1, "ON ");

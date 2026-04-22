@@ -25,7 +25,7 @@
           -->
         <air.test.parallel>instances</air.test.parallel>
         <!-- Nessie version (matching to Iceberg release) must be bumped along with Iceberg version bump to avoid compatibility issues -->
-        <dep.nessie.version>0.59.0</dep.nessie.version>
+        <dep.nessie.version>0.104.4</dep.nessie.version>
     </properties>
 
     <dependencies>
@@ -73,6 +73,11 @@
         <dependency>
             <groupId>io.airlift</groupId>
             <artifactId>bootstrap</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.airlift</groupId>
+            <artifactId>concurrent</artifactId>
         </dependency>
 
         <dependency>
@@ -132,6 +137,11 @@
 
         <dependency>
             <groupId>io.trino</groupId>
+            <artifactId>trino-filesystem-s3</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
             <artifactId>trino-hdfs</artifactId>
         </dependency>
 
@@ -153,6 +163,41 @@
 
         <dependency>
             <groupId>io.trino</groupId>
+            <artifactId>trino-main</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>io.airlift</groupId>
+                    <artifactId>http-server</artifactId>
+                </exclusion>
+                <!--
+                <exclusion>
+                    <groupId>io.airlift</groupId>
+                    <artifactId>jaxrs</artifactId>
+                </exclusion>
+                -->
+                <!--
+                <exclusion>
+                    <groupId>io.airlift</groupId>
+                    <artifactId>parser</artifactId>
+                </exclusion>
+                -->
+                <exclusion>
+                    <groupId>io.airlift</groupId>
+                    <artifactId>tracing</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.trino</groupId>
+                    <artifactId>trino-parser</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.eclipse.jetty.toolchain</groupId>
+                    <artifactId>jetty-jakarta-servlet-api</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
             <artifactId>trino-memory-context</artifactId>
         </dependency>
 
@@ -161,10 +206,12 @@
             <artifactId>trino-orc</artifactId>
         </dependency>
 
+        <!-- Using hard copy
         <dependency>
             <groupId>io.trino</groupId>
             <artifactId>trino-parquet</artifactId>
         </dependency>
+        -->
 
         <dependency>
             <groupId>io.trino</groupId>
@@ -215,6 +262,17 @@
 
         <dependency>
             <groupId>org.apache.iceberg</groupId>
+            <artifactId>iceberg-aws</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.jspecify</groupId>
+                    <artifactId>jspecify</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.iceberg</groupId>
             <artifactId>iceberg-core</artifactId>
         </dependency>
 
@@ -247,6 +305,12 @@
         <dependency>
             <groupId>org.apache.parquet</groupId>
             <artifactId>parquet-format-structures</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>javax.annotation</groupId>
+                    <artifactId>javax.annotation-api</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
@@ -279,6 +343,11 @@
         <dependency>
             <groupId>org.weakref</groupId>
             <artifactId>jmxutils</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>glue</artifactId>
         </dependency>
 
         <dependency>
@@ -325,12 +394,6 @@
 
         <dependency>
             <groupId>io.airlift</groupId>
-            <artifactId>concurrent</artifactId>
-            <scope>runtime</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>io.airlift</groupId>
             <artifactId>log-manager</artifactId>
             <scope>runtime</scope>
         </dependency>
@@ -368,14 +431,14 @@
         <dependency>
             <groupId>org.apache.httpcomponents.client5</groupId>
             <artifactId>httpclient5</artifactId>
-            <version>5.2.1</version>
+            <version>5.4.3</version>
             <scope>runtime</scope>
         </dependency>
 
         <dependency>
             <groupId>org.apache.httpcomponents.core5</groupId>
             <artifactId>httpcore5</artifactId>
-            <version>5.2.1</version>
+            <version>5.3.4</version>
             <scope>runtime</scope>
         </dependency>
 
@@ -473,19 +536,6 @@
         <dependency>
             <groupId>io.trino</groupId>
             <artifactId>trino-hive</artifactId>
-            <type>test-jar</type>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>io.trino</groupId>
-            <artifactId>trino-main</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>io.trino</groupId>
-            <artifactId>trino-main</artifactId>
             <type>test-jar</type>
             <scope>test</scope>
         </dependency>
@@ -593,6 +643,22 @@
     <build>
         <pluginManagement>
             <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <configuration>
+                        <compilerArgs combine.self="merge">
+                            <arg>${extraJavaVectorArgs}</arg>
+                        </compilerArgs>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-javadoc-plugin</artifactId>
+                    <configuration>
+                        <additionalOptions combine.self="merge">${extraJavaVectorArgs}</additionalOptions>
+                    </configuration>
+                </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-dependency-plugin</artifactId>

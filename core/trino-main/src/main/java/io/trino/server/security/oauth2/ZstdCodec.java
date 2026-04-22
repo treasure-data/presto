@@ -18,6 +18,9 @@ import io.airlift.compress.zstd.ZstdDecompressor;
 import io.jsonwebtoken.CompressionCodec;
 import io.jsonwebtoken.CompressionException;
 
+import java.io.InputStream;
+import java.io.OutputStream;
+
 import static java.lang.Math.toIntExact;
 import static java.util.Arrays.copyOfRange;
 
@@ -49,5 +52,23 @@ public class ZstdCodec
         byte[] output = new byte[toIntExact(ZstdDecompressor.getDecompressedSize(bytes, 0, bytes.length))];
         new ZstdDecompressor().decompress(bytes, 0, bytes.length, output, 0, output.length);
         return output;
+    }
+
+    @Override
+    public OutputStream compress(OutputStream out)
+    {
+        throw new UnsupportedOperationException("Unimplemented method 'compress'");
+    }
+
+    @Override
+    public InputStream decompress(InputStream in)
+    {
+        throw new UnsupportedOperationException("Unimplemented method 'decompress'");
+    }
+
+    @Override
+    public String getId()
+    {
+        throw new UnsupportedOperationException("Unimplemented method 'getId'");
     }
 }

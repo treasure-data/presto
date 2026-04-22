@@ -145,6 +145,10 @@
                     <artifactId>log4j</artifactId>
                 </exclusion>
                 <exclusion>
+                    <groupId>org.apache.commons</groupId>
+                    <artifactId>commons-lang3</artifactId>
+                </exclusion>
+                <exclusion>
                     <groupId>org.apache.logging.log4j</groupId>
                     <artifactId>log4j-core</artifactId>
                 </exclusion>
@@ -196,6 +200,10 @@
                 <exclusion>
                     <groupId>commons-codec</groupId>
                     <artifactId>commons-codec</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>commons-io</groupId>
+                    <artifactId>commons-io</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>commons-logging</groupId>
@@ -314,6 +322,10 @@
                     <artifactId>jackson-databind</artifactId>
                 </exclusion>
                 <exclusion>
+                    <groupId>commons-io</groupId>
+                    <artifactId>commons-io</artifactId>
+                </exclusion>
+                <exclusion>
                     <groupId>commons-logging</groupId>
                     <artifactId>commons-logging</artifactId>
                 </exclusion>
@@ -420,8 +432,16 @@
             <version>${dep.pinot.version}</version>
             <exclusions>
                 <exclusion>
+                    <groupId>commons-io</groupId>
+                    <artifactId>commons-io</artifactId>
+                </exclusion>
+                <exclusion>
                     <groupId>commons-logging</groupId>
                     <artifactId>commons-logging</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.commons</groupId>
+                    <artifactId>commons-lang3</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>org.apache.logging.log4j</groupId>
@@ -500,7 +520,7 @@
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
-            <version>3.11</version>
+            <version>3.18.0</version>
             <scope>runtime</scope>
         </dependency>
 

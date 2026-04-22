@@ -36,6 +36,12 @@
         <dependency>
             <groupId>com.datastax.oss</groupId>
             <artifactId>java-driver-core</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.reactivestreams</groupId>
+                    <artifactId>reactive-streams</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
@@ -183,6 +189,10 @@
             <groupId>io.trino.tempto</groupId>
             <artifactId>tempto-core</artifactId>
             <exclusions>
+                <exclusion>
+                    <groupId>commons-io</groupId>
+                    <artifactId>commons-io</artifactId>
+                </exclusion>
                 <exclusion>
                     <groupId>org.apache.httpcomponents</groupId>
                     <artifactId>httpclient</artifactId>

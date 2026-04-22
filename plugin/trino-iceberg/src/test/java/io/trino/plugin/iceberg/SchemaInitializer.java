@@ -51,8 +51,8 @@ public class SchemaInitializer
         String schemaProperties = this.schemaProperties.entrySet().stream()
                 .map(entry -> entry.getKey() + " = " + entry.getValue())
                 .collect(Collectors.joining(", ", " WITH ( ", " )"));
-        queryRunner.execute("CREATE SCHEMA IF NOT EXISTS " + schemaName + (this.schemaProperties.size() > 0 ? schemaProperties : ""));
-        copyTpchTables(queryRunner, "tpch", TINY_SCHEMA_NAME, queryRunner.getDefaultSession(), clonedTpchTables);
+        queryRunner.execute("CREATE SCHEMA IF NOT EXISTS \"" + schemaName + "\"" + (this.schemaProperties.size() > 0 ? schemaProperties : ""));
+        copyTpchTables(queryRunner, "tpch", TINY_SCHEMA_NAME, clonedTpchTables);
     }
 
     public static Builder builder()

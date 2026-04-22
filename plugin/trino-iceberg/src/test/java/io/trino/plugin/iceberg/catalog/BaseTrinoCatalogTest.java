@@ -147,7 +147,7 @@ public abstract class BaseTrinoCatalogTest
                             new Schema(Types.NestedField.of(1, true, "col1", Types.LongType.get())),
                             PartitionSpec.unpartitioned(),
                             SortOrder.unsorted(),
-                            tableLocation,
+                            Optional.of(tableLocation),
                             tableProperties)
                     .commitTransaction();
             assertThat(catalog.listTables(SESSION, Optional.of(namespace))).contains(schemaTableName);
@@ -208,7 +208,7 @@ public abstract class BaseTrinoCatalogTest
                             tableSchema,
                             PartitionSpec.unpartitioned(),
                             sortOrder,
-                            tableLocation,
+                            Optional.of(tableLocation),
                             ImmutableMap.of())
                     .commitTransaction();
             assertThat(catalog.listTables(SESSION, Optional.of(namespace))).contains(schemaTableName);
@@ -263,7 +263,7 @@ public abstract class BaseTrinoCatalogTest
                             new Schema(Types.NestedField.of(1, true, "col1", Types.LongType.get())),
                             PartitionSpec.unpartitioned(),
                             SortOrder.unsorted(),
-                            arbitraryTableLocation(catalog, SESSION, sourceSchemaTableName),
+                            Optional.of(arbitraryTableLocation(catalog, SESSION, sourceSchemaTableName)),
                             ImmutableMap.of())
                     .commitTransaction();
             assertThat(catalog.listTables(SESSION, Optional.of(namespace))).contains(sourceSchemaTableName);

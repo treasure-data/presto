@@ -207,7 +207,7 @@ public class TrinoJdbcCatalog
             Schema schema,
             PartitionSpec partitionSpec,
             SortOrder sortOrder,
-            String location,
+            Optional<String> location,
             Map<String, String> properties)
     {
         if (!listNamespaces(session, Optional.of(schemaTableName.getSchemaName())).contains(schemaTableName.getSchemaName())) {

@@ -13,10 +13,12 @@
  */
 package io.trino.plugin.iceberg.delete;
 
+import com.google.errorprone.annotations.ThreadSafe;
 import io.trino.spi.Page;
 
 import static java.util.Objects.requireNonNull;
 
+@ThreadSafe
 public interface RowPredicate
 {
     boolean test(Page page, int position);
@@ -27,7 +29,7 @@ public interface RowPredicate
         return (page, position) -> test(page, position) && other.test(page, position);
     }
 
-    default Page filterPage(Page page)
+    default void applyFilter(Page page)
     {
         int positionCount = page.getPositionCount();
         int[] retained = new int[positionCount];
@@ -38,9 +40,8 @@ public interface RowPredicate
                 retainedCount++;
             }
         }
-        if (retainedCount == positionCount) {
-            return page;
+        if (retainedCount != positionCount) {
+            page.getPositions(retained, 0, retainedCount);
         }
-        return page.getPositions(retained, 0, retainedCount);
     }
 }

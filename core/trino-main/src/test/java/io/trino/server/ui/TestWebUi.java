@@ -29,6 +29,7 @@ import io.airlift.security.pem.PemReader;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwsHeader;
 import io.jsonwebtoken.impl.DefaultClaims;
+import io.jsonwebtoken.impl.DefaultClaimsBuilder;
 import io.trino.security.AccessControl;
 import io.trino.server.HttpRequestSessionContextFactory;
 import io.trino.server.ProtocolConfig;
@@ -1297,11 +1298,12 @@ public class TestWebUi
 
         private static Claims createClaims()
         {
-            return new DefaultClaims()
+            return new DefaultClaimsBuilder()
                     .setIssuer(TOKEN_ISSUER)
                     .setAudience(OAUTH_CLIENT_ID)
                     .setSubject("test-user")
-                    .setExpiration(Date.from(Instant.now().plus(Duration.ofMinutes(5))));
+                    .setExpiration(Date.from(Instant.now().plus(Duration.ofMinutes(5))))
+                    .build();
         }
 
         public static String randomNonce()

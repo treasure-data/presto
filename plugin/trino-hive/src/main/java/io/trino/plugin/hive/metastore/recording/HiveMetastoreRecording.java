@@ -33,6 +33,7 @@ import io.trino.plugin.hive.metastore.HiveTableName;
 import io.trino.plugin.hive.metastore.Partition;
 import io.trino.plugin.hive.metastore.PartitionFilter;
 import io.trino.plugin.hive.metastore.Table;
+import io.trino.plugin.hive.metastore.TableInfo;
 import io.trino.plugin.hive.metastore.TablesWithParameterCacheKey;
 import io.trino.plugin.hive.metastore.UserTableKey;
 import io.trino.spi.TrinoException;
@@ -71,7 +72,7 @@ public class HiveMetastoreRecording
     private final NonEvictableCache<HiveTableName, Optional<Table>> tableCache;
     private final NonEvictableCache<HiveTableName, PartitionStatistics> tableStatisticsCache;
     private final NonEvictableCache<HivePartitionName, PartitionStatistics> partitionStatisticsCache;
-    private final NonEvictableCache<String, List<String>> tableNamesCache;
+    private final NonEvictableCache<String, List<TableInfo>> tableNamesCache;
     private final NonEvictableCache<SingletonCacheKey, Optional<List<SchemaTableName>>> allTableNamesCache;
     private final NonEvictableCache<TablesWithParameterCacheKey, List<String>> tablesWithParameterCache;
     private final NonEvictableCache<String, List<String>> viewNamesCache;
@@ -179,7 +180,7 @@ public class HiveMetastoreRecording
         return loadPartitionValues(partitionNames, partitionStatisticsCache, valueSupplier);
     }
 
-    public List<String> getAllTables(String databaseName, Supplier<List<String>> valueSupplier)
+    public List<TableInfo> getAllTables(String databaseName, Supplier<List<TableInfo>> valueSupplier)
     {
         return loadValue(tableNamesCache, databaseName, valueSupplier);
     }
@@ -338,7 +339,7 @@ public class HiveMetastoreRecording
         private final List<Pair<HiveTableName, Optional<Table>>> tables;
         private final List<Pair<HiveTableName, PartitionStatistics>> tableStatistics;
         private final List<Pair<HivePartitionName, PartitionStatistics>> partitionStatistics;
-        private final List<Pair<String, List<String>>> allTables;
+        private final List<Pair<String, List<TableInfo>>> allTables;
         private final List<Pair<TablesWithParameterCacheKey, List<String>>> tablesWithParameter;
         private final List<Pair<String, List<String>>> allViews;
         private final List<Pair<HivePartitionName, Optional<Partition>>> partitions;
@@ -357,7 +358,7 @@ public class HiveMetastoreRecording
                 @JsonProperty("tables") List<Pair<HiveTableName, Optional<Table>>> tables,
                 @JsonProperty("tableStatistics") List<Pair<HiveTableName, PartitionStatistics>> tableStatistics,
                 @JsonProperty("partitionStatistics") List<Pair<HivePartitionName, PartitionStatistics>> partitionStatistics,
-                @JsonProperty("allTables") List<Pair<String, List<String>>> allTables,
+                @JsonProperty("allTables") List<Pair<String, List<TableInfo>>> allTables,
                 @JsonProperty("tablesWithParameter") List<Pair<TablesWithParameterCacheKey, List<String>>> tablesWithParameter,
                 @JsonProperty("allViews") List<Pair<String, List<String>>> allViews,
                 @JsonProperty("partitions") List<Pair<HivePartitionName, Optional<Partition>>> partitions,
@@ -429,7 +430,7 @@ public class HiveMetastoreRecording
         }
 
         @JsonProperty
-        public List<Pair<String, List<String>>> getAllTables()
+        public List<Pair<String, List<TableInfo>>> getAllTables()
         {
             return allTables;
         }

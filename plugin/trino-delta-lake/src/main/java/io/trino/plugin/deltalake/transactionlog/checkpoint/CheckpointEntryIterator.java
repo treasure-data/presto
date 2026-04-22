@@ -186,13 +186,14 @@ public class CheckpointEntryIterator
                 0,
                 fileSize,
                 columns,
-                tupleDomain,
+                List.of(tupleDomain),
                 true,
                 DateTimeZone.UTC,
                 stats,
                 parquetReaderOptions,
                 Optional.empty(),
-                domainCompactionThreshold);
+                domainCompactionThreshold,
+                OptionalLong.empty());
 
         verify(pageSource.getReaderColumns().isEmpty(), "All columns expected to be base columns");
 

@@ -109,11 +109,11 @@ public class TestDeltaLakeGlueMetastore
                 .put("delta.hide-non-delta-lake-tables", "true")
                 .buildOrThrow();
 
+        ConnectorContext context = new TestingConnectorContext();
         Bootstrap app = new Bootstrap(
                 // connector dependencies
                 new JsonModule(),
                 binder -> {
-                    ConnectorContext context = new TestingConnectorContext();
                     binder.bind(CatalogName.class).toInstance(new CatalogName("test"));
                     binder.bind(TypeManager.class).toInstance(context.getTypeManager());
                     binder.bind(NodeManager.class).toInstance(context.getNodeManager());
@@ -127,7 +127,7 @@ public class TestDeltaLakeGlueMetastore
                 new DeltaLakeModule(),
                 // test setup
                 binder -> binder.bind(HdfsEnvironment.class).toInstance(HDFS_ENVIRONMENT),
-                new FileSystemModule());
+                new FileSystemModule("test", context.getNodeManager(), context.getOpenTelemetry(), false));
 
         Injector injector = app
                 .doNotInitializeLogging()

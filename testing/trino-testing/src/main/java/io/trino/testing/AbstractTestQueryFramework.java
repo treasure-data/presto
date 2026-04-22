@@ -18,6 +18,7 @@ import com.google.common.collect.MoreCollectors;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import io.airlift.units.Duration;
 import io.trino.Session;
+import io.trino.cost.StatsAndCosts;
 import io.trino.execution.QueryInfo;
 import io.trino.execution.QueryManager;
 import io.trino.execution.QueryState;
@@ -29,6 +30,8 @@ import io.trino.execution.TaskState;
 import io.trino.execution.warnings.WarningCollector;
 import io.trino.memory.LocalMemoryManager;
 import io.trino.memory.MemoryPool;
+import io.trino.metadata.FunctionManager;
+import io.trino.metadata.Metadata;
 import io.trino.metadata.QualifiedObjectName;
 import io.trino.metadata.TableHandle;
 import io.trino.operator.OperatorStats;
@@ -78,6 +81,7 @@ import static io.trino.execution.querystats.PlanOptimizersStatsCollector.createP
 import static io.trino.sql.ParsingUtil.createParsingOptions;
 import static io.trino.sql.SqlFormatter.formatSql;
 import static io.trino.sql.planner.OptimizerConfig.JoinReorderingStrategy;
+import static io.trino.sql.planner.planprinter.PlanPrinter.textLogicalPlan;
 import static io.trino.testing.assertions.Assert.assertEventually;
 import static io.trino.transaction.TransactionBuilder.transaction;
 import static java.lang.String.format;
@@ -473,6 +477,13 @@ public abstract class AbstractTestQueryFramework
                 queryRunner.getAccessControl().reset();
             }
         });
+    }
+
+    protected String formatPlan(Session session, Plan plan)
+    {
+        Metadata metadata = getDistributedQueryRunner().getCoordinator().getMetadata();
+        FunctionManager functionManager = getDistributedQueryRunner().getCoordinator().getFunctionManager();
+        return inTransaction(session, transactionSession -> textLogicalPlan(plan.getRoot(), plan.getTypes(), metadata, functionManager, StatsAndCosts.empty(), transactionSession, 0, false));
     }
 
     protected void assertAccessDenied(@Language("SQL") String sql, @Language("RegExp") String exceptionsMessageRegExp, TestingPrivilege... deniedPrivileges)

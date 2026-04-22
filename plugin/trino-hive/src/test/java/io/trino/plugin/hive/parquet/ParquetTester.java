@@ -29,7 +29,6 @@ import io.trino.parquet.writer.ParquetWriter;
 import io.trino.parquet.writer.ParquetWriterOptions;
 import io.trino.plugin.hive.FileFormatDataSourceStats;
 import io.trino.plugin.hive.HiveConfig;
-import io.trino.plugin.hive.HiveFormatsConfig;
 import io.trino.plugin.hive.HiveSessionProperties;
 import io.trino.plugin.hive.HiveStorageFormat;
 import io.trino.plugin.hive.benchmark.FileFormat;
@@ -158,10 +157,10 @@ public class ParquetTester
     private static final int MAX_PRECISION_INT64 = toIntExact(maxPrecision(8));
 
     private static final ConnectorSession SESSION = getHiveSession(
-            createHiveConfig(false), new ParquetReaderConfig().setOptimizedReaderEnabled(false));
+            createHiveConfig(false), new ParquetReaderConfig());
 
     private static final ConnectorSession SESSION_OPTIMIZED_READER = getHiveSession(
-            createHiveConfig(false), new ParquetReaderConfig().setOptimizedReaderEnabled(true));
+            createHiveConfig(false), new ParquetReaderConfig());
 
     private static final ConnectorSession SESSION_USE_NAME = getHiveSession(createHiveConfig(true));
 
@@ -452,12 +451,10 @@ public class ParquetTester
                     new HiveConfig()
                             .setHiveStorageFormat(HiveStorageFormat.PARQUET)
                             .setUseParquetColumnNames(false),
-                    new HiveFormatsConfig(),
                     new OrcReaderConfig(),
                     new OrcWriterConfig(),
                     new ParquetReaderConfig()
-                            .setMaxReadBlockSize(maxReadBlockSize)
-                            .setOptimizedReaderEnabled(optimizedReaderEnabled),
+                            .setMaxReadBlockSize(maxReadBlockSize),
                     new ParquetWriterConfig());
             ConnectorSession session = TestingConnectorSession.builder()
                     .setPropertyMetadata(hiveSessionProperties.getSessionProperties())
@@ -793,7 +790,6 @@ public class ParquetTester
                         .build(),
                 compressionCodec,
                 "test-version",
-                false,
                 Optional.of(DateTimeZone.getDefault()),
                 Optional.of(new ParquetWriteValidationBuilder(types, columnNames)));
 

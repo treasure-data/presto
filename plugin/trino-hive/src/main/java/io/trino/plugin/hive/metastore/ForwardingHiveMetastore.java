@@ -13,25 +13,21 @@
  */
 package io.trino.plugin.hive.metastore;
 
-import io.trino.hive.thrift.metastore.DataOperationType;
-import io.trino.plugin.hive.HiveColumnStatisticType;
+import com.google.common.collect.ImmutableSet;
 import io.trino.plugin.hive.HivePartition;
 import io.trino.plugin.hive.HiveType;
 import io.trino.plugin.hive.PartitionStatistics;
 import io.trino.plugin.hive.acid.AcidOperation;
-import io.trino.plugin.hive.acid.AcidTransaction;
 import io.trino.plugin.hive.metastore.HivePrivilegeInfo.HivePrivilege;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.security.RoleGrant;
-import io.trino.spi.type.Type;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
-import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
 
@@ -64,78 +60,39 @@ public abstract class ForwardingHiveMetastore
     }
 
     @Override
-    public Set<HiveColumnStatisticType> getSupportedColumnStatistics(Type type)
+    public Map<String, HiveColumnStatistics> getTableColumnStatistics(String databaseName, String tableName, Set<String> columnNames)
     {
-        return delegate.getSupportedColumnStatistics(type);
+        return delegate.getTableColumnStatistics(databaseName, tableName, columnNames);
     }
 
     @Override
-    public PartitionStatistics getTableStatistics(Table table)
+    public Map<String, Map<String, HiveColumnStatistics>> getPartitionColumnStatistics(String databaseName, String tableName, Set<String> partitionNames, Set<String> columnNames)
     {
-        return delegate.getTableStatistics(table);
+        return delegate.getPartitionColumnStatistics(databaseName, tableName, partitionNames, columnNames);
     }
 
     @Override
-    public Map<String, PartitionStatistics> getPartitionStatistics(Table table, List<Partition> partitions)
+    public void updateTableStatistics(String databaseName, String tableName, OptionalLong acidWriteId, StatisticsUpdateMode mode, PartitionStatistics statisticsUpdate)
     {
-        return delegate.getPartitionStatistics(table, partitions);
+        delegate.updateTableStatistics(databaseName, tableName, acidWriteId, mode, statisticsUpdate);
     }
 
     @Override
-    public void updateTableStatistics(
-            String databaseName,
-            String tableName,
-            AcidTransaction transaction,
-            Function<PartitionStatistics, PartitionStatistics> update)
+    public void updatePartitionStatistics(Table table, StatisticsUpdateMode mode, Map<String, PartitionStatistics> partitionUpdates)
     {
-        delegate.updateTableStatistics(databaseName, tableName, transaction, update);
+        delegate.updatePartitionStatistics(table, mode, partitionUpdates);
     }
 
     @Override
-    public void updatePartitionStatistics(
-            Table table,
-            String partitionName,
-            Function<PartitionStatistics, PartitionStatistics> update)
+    public List<TableInfo> getTables(String databaseName)
     {
-        delegate.updatePartitionStatistics(table, partitionName, update);
+        return delegate.getTables(databaseName);
     }
 
     @Override
-    public void updatePartitionStatistics(
-            Table table,
-            Map<String, Function<PartitionStatistics, PartitionStatistics>> updates)
+    public List<String> getTableNamesWithParameters(String databaseName, String parameterKey, ImmutableSet<String> parameterValues)
     {
-        delegate.updatePartitionStatistics(table, updates);
-    }
-
-    @Override
-    public List<String> getAllTables(String databaseName)
-    {
-        return delegate.getAllTables(databaseName);
-    }
-
-    @Override
-    public Optional<List<SchemaTableName>> getAllTables()
-    {
-        return delegate.getAllTables();
-    }
-
-    @Override
-    public List<String> getTablesWithParameter(String databaseName, String parameterKey, String parameterValue)
-    {
-        return delegate.getTablesWithParameter(databaseName, parameterKey, parameterValue);
-    }
-
-    @Override
-    public List<String> getAllViews(String databaseName)
-    {
-        return delegate.getAllViews(databaseName);
-    }
-
-    @Override
-    public Optional<List<SchemaTableName>> getAllViews()
-    {
-        return delegate.getAllViews();
+        return delegate.getTableNamesWithParameters(databaseName, parameterKey, parameterValues);
     }
 
     @Override
@@ -179,9 +136,10 @@ public abstract class ForwardingHiveMetastore
             String databaseName,
             String tableName,
             Table newTable,
-            PrincipalPrivileges principalPrivileges)
+            PrincipalPrivileges principalPrivileges,
+            Map<String, String> environmentContext)
     {
-        delegate.replaceTable(databaseName, tableName, newTable, principalPrivileges);
+        delegate.replaceTable(databaseName, tableName, newTable, principalPrivileges, environmentContext);
     }
 
     @Override
@@ -314,12 +272,6 @@ public abstract class ForwardingHiveMetastore
     }
 
     @Override
-    public Set<RoleGrant> listGrantedPrincipals(String role)
-    {
-        return delegate.listGrantedPrincipals(role);
-    }
-
-    @Override
     public Set<RoleGrant> listRoleGrants(HivePrincipal principal)
     {
         return delegate.listRoleGrants(principal);
@@ -411,19 +363,6 @@ public abstract class ForwardingHiveMetastore
     }
 
     @Override
-    public void acquireTableWriteLock(
-            AcidTransactionOwner transactionOwner,
-            String queryId,
-            long transactionId,
-            String dbName,
-            String tableName,
-            DataOperationType operation,
-            boolean isDynamicPartitionWrite)
-    {
-        delegate.acquireTableWriteLock(transactionOwner, queryId, transactionId, dbName, tableName, operation, isDynamicPartitionWrite);
-    }
-
-    @Override
     public void updateTableWriteId(
             String dbName,
             String tableName,
@@ -432,16 +371,6 @@ public abstract class ForwardingHiveMetastore
             OptionalLong rowCountChange)
     {
         delegate.updateTableWriteId(dbName, tableName, transactionId, writeId, rowCountChange);
-    }
-
-    @Override
-    public void alterPartitions(
-            String dbName,
-            String tableName,
-            List<Partition> partitions,
-            long writeId)
-    {
-        delegate.alterPartitions(dbName, tableName, partitions, writeId);
     }
 
     @Override

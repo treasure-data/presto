@@ -17,6 +17,7 @@ import jakarta.annotation.Nullable;
 
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.stream.IntStream;
 
 import static io.trino.spi.block.BlockUtil.arraySame;
 import static io.trino.spi.block.BlockUtil.checkArrayRange;
@@ -24,7 +25,6 @@ import static io.trino.spi.block.BlockUtil.checkReadablePosition;
 import static io.trino.spi.block.BlockUtil.checkValidPositions;
 import static io.trino.spi.block.BlockUtil.checkValidRegion;
 import static io.trino.spi.block.BlockUtil.compactArray;
-import static io.trino.spi.block.BlockUtil.compactOffsets;
 import static io.trino.spi.block.RowBlock.createRowBlockInternal;
 
 public abstract class AbstractRowBlock
@@ -41,9 +41,15 @@ public abstract class AbstractRowBlock
     protected abstract Block[] getRawFieldBlocks();
 
     @Nullable
-    protected abstract int[] getFieldBlockOffsets();
+    protected int[] getFieldBlockOffsets()
+    {
+        return IntStream.range(0, getPositionCount() + 1).toArray();
+    }
 
-    protected abstract int getOffsetBase();
+    protected int getOffsetBase()
+    {
+        return 0;
+    }
 
     /**
      * @return the underlying rowIsNull array, or null when all rows are guaranteed to be non-null
@@ -54,8 +60,7 @@ public abstract class AbstractRowBlock
     // the offset in each field block, it can also be viewed as the "entry-based" offset in the RowBlock
     public final int getFieldBlockOffset(int position)
     {
-        int[] offsets = getFieldBlockOffsets();
-        return offsets != null ? offsets[position + getOffsetBase()] : position + getOffsetBase();
+        return position;
     }
 
     protected AbstractRowBlock(int numFields)
@@ -75,59 +80,45 @@ public abstract class AbstractRowBlock
     @Override
     public Block copyPositions(int[] positions, int offset, int length)
     {
+        boolean[] rowIsNull = getRowIsNull();
+        Block[] fieldBlocks = getRawFieldBlocks();
+
         checkArrayRange(positions, offset, length);
 
-        int[] newOffsets = null;
-
-        int[] fieldBlockPositions = new int[length];
-        int fieldBlockPositionCount;
-        boolean[] newRowIsNull;
-        if (getRowIsNull() == null) {
-            // No nulls are present
-            newRowIsNull = null;
-            for (int i = 0; i < fieldBlockPositions.length; i++) {
-                int position = positions[offset + i];
-                checkReadablePosition(this, position);
-                fieldBlockPositions[i] = getFieldBlockOffset(position);
-            }
-            fieldBlockPositionCount = fieldBlockPositions.length;
-        }
-        else {
-            newRowIsNull = new boolean[length];
-            newOffsets = new int[length + 1];
-            fieldBlockPositionCount = 0;
-            for (int i = 0; i < length; i++) {
-                newOffsets[i] = fieldBlockPositionCount;
-                int position = positions[offset + i];
-                boolean positionIsNull = isNull(position);
-                newRowIsNull[i] = positionIsNull;
-                fieldBlockPositions[fieldBlockPositionCount] = getFieldBlockOffset(position);
-                fieldBlockPositionCount += positionIsNull ? 0 : 1;
-            }
-            // Record last offset position
-            newOffsets[length] = fieldBlockPositionCount;
-            if (fieldBlockPositionCount == length) {
-                // No nulls encountered, discard the null mask and offsets
-                newRowIsNull = null;
-                newOffsets = null;
-            }
-        }
-
         Block[] newBlocks = new Block[numFields];
-        Block[] rawBlocks = getRawFieldBlocks();
-        for (int i = 0; i < newBlocks.length; i++) {
-            newBlocks[i] = rawBlocks[i].copyPositions(fieldBlockPositions, 0, fieldBlockPositionCount);
+        for (int i = 0; i < fieldBlocks.length; i++) {
+            newBlocks[i] = fieldBlocks[i].copyPositions(positions, offset, length);
         }
-        return createRowBlockInternal(0, length, newRowIsNull, newOffsets, newBlocks);
+
+        boolean[] newRowIsNull = null;
+        if (rowIsNull != null) {
+            newRowIsNull = new boolean[length];
+            for (int i = 0; i < length; i++) {
+                newRowIsNull[i] = rowIsNull[positions[offset + i]];
+            }
+        }
+
+        return createRowBlockInternal(length, newRowIsNull, newBlocks);
     }
 
     @Override
-    public Block getRegion(int position, int length)
+    public Block getRegion(int positionOffset, int length)
     {
         int positionCount = getPositionCount();
-        checkValidRegion(positionCount, position, length);
+        boolean[] rowIsNull = getRowIsNull();
+        Block[] fieldBlocks = getRawFieldBlocks();
 
-        return createRowBlockInternal(position + getOffsetBase(), length, getRowIsNull(), getFieldBlockOffsets(), getRawFieldBlocks());
+        checkValidRegion(positionCount, positionOffset, length);
+
+        // This copies the null array, but this dramatically simplifies this class.
+        // Without a copy here, we would need a null array offset, and that would mean that the
+        // null array would be offset while the field blocks are not offset, which is confusing.
+        boolean[] newRowIsNull = rowIsNull == null ? null : compactArray(rowIsNull, positionOffset, length);
+        Block[] newBlocks = new Block[fieldBlocks.length];
+        for (int i = 0; i < newBlocks.length; i++) {
+            newBlocks[i] = fieldBlocks[i].getRegion(positionOffset, length);
+        }
+        return createRowBlockInternal(length, newRowIsNull, newBlocks);
     }
 
     @Override
@@ -201,7 +192,7 @@ public abstract class AbstractRowBlock
             boolean[] rowIsNull = getRowIsNull();
             if (rowIsNull != null) {
                 // Some positions in usedPositions may be null which must be removed from the selectedFieldPositionCount
-                int offsetBase = getOffsetBase();
+                int offsetBase = 0;
                 for (int i = 0; i < positions.length; i++) {
                     if (positions[i] && rowIsNull[i + offsetBase]) {
                         selectedFieldPositionCount--; // selected row is null, don't include it in the selected field positions
@@ -220,67 +211,34 @@ public abstract class AbstractRowBlock
 
     private long getSpecificPositionsSizeInBytes(boolean[] positions, int selectedRowPositions)
     {
-        int positionCount = getPositionCount();
-        int offsetBase = getOffsetBase();
-        boolean[] rowIsNull = getRowIsNull();
-        // No fixed width size per row, specific positions used must be tracked
-        int totalFieldPositions = getRawFieldBlocks()[0].getPositionCount();
-        boolean[] fieldPositions;
-        int selectedFieldPositionCount;
-        if (rowIsNull == null) {
-            // No nulls, so the same number of positions are used
-            selectedFieldPositionCount = selectedRowPositions;
-            if (offsetBase == 0 && positionCount == totalFieldPositions) {
-                // No need to adapt the positions array at all, reuse it directly
-                fieldPositions = positions;
-            }
-            else {
-                // no nulls present, so we can just shift the positions array into alignment with the elements block with other positions unused
-                fieldPositions = new boolean[totalFieldPositions];
-                System.arraycopy(positions, 0, fieldPositions, offsetBase, positions.length);
-            }
-        }
-        else {
-            fieldPositions = new boolean[totalFieldPositions];
-            selectedFieldPositionCount = 0;
-            for (int i = 0; i < positions.length; i++) {
-                if (positions[i] && !rowIsNull[offsetBase + i]) {
-                    selectedFieldPositionCount++;
-                    fieldPositions[getFieldBlockOffset(i)] = true;
-                }
-            }
-        }
-
         Block[] rawFieldBlocks = getRawFieldBlocks();
         long sizeInBytes = ((Integer.BYTES + Byte.BYTES) * (long) selectedRowPositions); // offsets + rowIsNull
         for (int j = 0; j < numFields; j++) {
-            sizeInBytes += rawFieldBlocks[j].getPositionsSizeInBytes(fieldPositions, selectedFieldPositionCount);
+            sizeInBytes += rawFieldBlocks[j].getPositionsSizeInBytes(positions, selectedRowPositions);
         }
         return sizeInBytes;
     }
 
     @Override
-    public Block copyRegion(int position, int length)
+    public Block copyRegion(int positionOffset, int length)
     {
         int positionCount = getPositionCount();
-        checkValidRegion(positionCount, position, length);
-
-        int startFieldBlockOffset = getFieldBlockOffset(position);
-        int endFieldBlockOffset = getFieldBlockOffset(position + length);
-        int fieldBlockLength = endFieldBlockOffset - startFieldBlockOffset;
-        Block[] newBlocks = new Block[numFields];
-        for (int i = 0; i < numFields; i++) {
-            newBlocks[i] = getRawFieldBlocks()[i].copyRegion(startFieldBlockOffset, fieldBlockLength);
-        }
-        int[] fieldBlockOffsets = getFieldBlockOffsets();
-        int[] newOffsets = fieldBlockOffsets == null ? null : compactOffsets(fieldBlockOffsets, position + getOffsetBase(), length);
         boolean[] rowIsNull = getRowIsNull();
-        boolean[] newRowIsNull = rowIsNull == null ? null : compactArray(rowIsNull, position + getOffsetBase(), length);
+        Block[] fieldBlocks = getRawFieldBlocks();
 
-        if (arraySame(newBlocks, getRawFieldBlocks()) && newOffsets == fieldBlockOffsets && newRowIsNull == rowIsNull) {
+        checkValidRegion(positionCount, positionOffset, length);
+
+        Block[] newBlocks = new Block[fieldBlocks.length];
+        for (int i = 0; i < fieldBlocks.length; i++) {
+            newBlocks[i] = fieldBlocks[i].copyRegion(positionOffset, length);
+        }
+
+        boolean[] newRowIsNull = rowIsNull == null ? null : compactArray(rowIsNull, positionOffset, length);
+        if (newRowIsNull == rowIsNull && arraySame(newBlocks, fieldBlocks)) {
             return this;
         }
-        return createRowBlockInternal(0, length, newRowIsNull, newOffsets, newBlocks);
+
+        return createRowBlockInternal(length, newRowIsNull, newBlocks);
     }
 
     @Override
@@ -299,17 +257,13 @@ public abstract class AbstractRowBlock
     {
         checkReadablePosition(this, position);
 
-        int startFieldBlockOffset = getFieldBlockOffset(position);
-        int endFieldBlockOffset = getFieldBlockOffset(position + 1);
-        int fieldBlockLength = endFieldBlockOffset - startFieldBlockOffset;
         Block[] newBlocks = new Block[numFields];
         for (int i = 0; i < numFields; i++) {
-            newBlocks[i] = getRawFieldBlocks()[i].copyRegion(startFieldBlockOffset, fieldBlockLength);
+            newBlocks[i] = getRawFieldBlocks()[i].getSingleValueBlock(position);
         }
         boolean[] newRowIsNull = isNull(position) ? new boolean[] {true} : null;
-        int[] newOffsets = isNull(position) ? new int[] {0, fieldBlockLength} : null;
 
-        return createRowBlockInternal(0, 1, newRowIsNull, newOffsets, newBlocks);
+        return createRowBlockInternal(1, newRowIsNull, newBlocks);
     }
 
     @Override
@@ -334,6 +288,6 @@ public abstract class AbstractRowBlock
     {
         checkReadablePosition(this, position);
         boolean[] rowIsNull = getRowIsNull();
-        return rowIsNull != null && rowIsNull[position + getOffsetBase()];
+        return rowIsNull != null && rowIsNull[position];
     }
 }

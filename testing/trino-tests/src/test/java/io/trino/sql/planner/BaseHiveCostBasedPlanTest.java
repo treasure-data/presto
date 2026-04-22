@@ -24,6 +24,7 @@ import org.testng.annotations.BeforeClass;
 
 import java.io.File;
 import java.net.URL;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Optional;
@@ -59,7 +60,7 @@ public abstract class BaseHiveCostBasedPlanTest
         RecordingHiveMetastore metastore = new RecordingHiveMetastore(
                 new UnimplementedHiveMetastore(),
                 new HiveMetastoreRecording(recordingConfig, createJsonCodec()));
-        return new TestingHiveConnectorFactory(metastore);
+        return new TestingHiveConnectorFactory(Path.of(metadataDir), Optional.of(metastore));
     }
 
     private static String getSchema(String metadataDir)

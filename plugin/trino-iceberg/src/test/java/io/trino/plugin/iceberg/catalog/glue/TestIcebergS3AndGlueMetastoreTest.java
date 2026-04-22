@@ -20,11 +20,11 @@ import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.QueryRunner;
 import org.testng.annotations.Test;
 
-import java.nio.file.Path;
+import java.net.URI;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static io.trino.plugin.hive.metastore.glue.GlueHiveMetastore.createTestingGlueHiveMetastore;
+import static io.trino.plugin.hive.metastore.glue.TestingGlueHiveMetastore.createTestingGlueHiveMetastore;
 import static io.trino.testing.TestingNames.randomNameSuffix;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -42,7 +42,7 @@ public class TestIcebergS3AndGlueMetastoreTest
     protected QueryRunner createQueryRunner()
             throws Exception
     {
-        metastore = createTestingGlueHiveMetastore(Path.of(schemaPath()));
+        metastore = createTestingGlueHiveMetastore(URI.create(schemaPath()), this::closeAfterClass);
         DistributedQueryRunner queryRunner = IcebergQueryRunner.builder()
                 .setIcebergProperties(ImmutableMap.<String, String>builder()
                         .put("iceberg.catalog.type", "glue")

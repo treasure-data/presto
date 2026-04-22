@@ -13,21 +13,16 @@
  */
 package io.trino.plugin.iceberg.catalog.glue;
 
-import com.amazonaws.services.glue.AWSGlueAsync;
-import com.amazonaws.services.glue.AWSGlueAsyncClientBuilder;
-import com.amazonaws.services.glue.model.BatchDeleteTableRequest;
-import com.amazonaws.services.glue.model.DeleteDatabaseRequest;
-import com.amazonaws.services.glue.model.GetTablesRequest;
-import com.amazonaws.services.glue.model.GetTablesResult;
-import com.amazonaws.services.glue.model.Table;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import io.trino.plugin.hive.aws.AwsApiCallStats;
 import io.trino.plugin.iceberg.BaseIcebergMaterializedViewTest;
 import io.trino.plugin.iceberg.IcebergQueryRunner;
 import io.trino.plugin.iceberg.SchemaInitializer;
 import io.trino.testing.QueryRunner;
 import org.testng.annotations.AfterClass;
+import software.amazon.awssdk.services.glue.GlueClient;
+import software.amazon.awssdk.services.glue.model.GetTablesResponse;
+import software.amazon.awssdk.services.glue.model.Table;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -35,8 +30,8 @@ import java.util.Collection;
 import java.util.Set;
 
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
-import static io.trino.plugin.hive.metastore.glue.AwsSdkUtil.getPaginatedResults;
 import static io.trino.testing.TestingNames.randomNameSuffix;
+import static org.apache.iceberg.BaseMetastoreTableOperations.METADATA_LOCATION_PROP;
 
 public class TestIcebergGlueCatalogMaterializedView
         extends BaseIcebergMaterializedViewTest
@@ -71,30 +66,36 @@ public class TestIcebergGlueCatalogMaterializedView
         return new File(schemaDirectory, schemaName + ".db").getPath();
     }
 
+    @Override
+    protected String getStorageMetadataLocation(String materializedViewName)
+    {
+        return GlueClient.create()
+                .getTable(x -> x
+                        .databaseName(schemaName)
+                        .name(materializedViewName))
+                .table()
+                .parameters().get(METADATA_LOCATION_PROP);
+    }
+
     @AfterClass(alwaysRun = true)
     public void cleanup()
     {
         cleanUpSchema(schemaName);
-        cleanUpSchema(storageSchemaName);
     }
 
     private static void cleanUpSchema(String schema)
     {
-        AWSGlueAsync glueClient = AWSGlueAsyncClientBuilder.defaultClient();
-        Set<String> tableNames = getPaginatedResults(
-                glueClient::getTables,
-                new GetTablesRequest().withDatabaseName(schema),
-                GetTablesRequest::setNextToken,
-                GetTablesResult::getNextToken,
-                new AwsApiCallStats())
-                .map(GetTablesResult::getTableList)
+        GlueClient glueClient = GlueClient.create();
+        Set<String> tableNames = glueClient
+                .getTablesPaginator(x -> x.databaseName(schema))
+                .stream()
+                .map(GetTablesResponse::tableList)
                 .flatMap(Collection::stream)
-                .map(Table::getName)
+                .map(Table::name)
                 .collect(toImmutableSet());
-        glueClient.batchDeleteTable(new BatchDeleteTableRequest()
-                .withDatabaseName(schema)
-                .withTablesToDelete(tableNames));
-        glueClient.deleteDatabase(new DeleteDatabaseRequest()
-                .withName(schema));
+        glueClient.batchDeleteTable(x -> x
+                .databaseName(schema)
+                .tablesToDelete(tableNames));
+        glueClient.deleteDatabase(x -> x.name(schema));
     }
 }

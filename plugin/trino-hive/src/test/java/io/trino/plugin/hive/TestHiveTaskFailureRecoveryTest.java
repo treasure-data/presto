@@ -17,6 +17,7 @@ import com.google.common.collect.ImmutableMap;
 import io.trino.operator.RetryPolicy;
 import io.trino.plugin.exchange.filesystem.FileSystemExchangePlugin;
 import io.trino.plugin.exchange.filesystem.containers.MinioStorage;
+import io.trino.plugin.hive.containers.Hive3MinioDataLake;
 import io.trino.plugin.hive.containers.HiveMinioDataLake;
 import io.trino.plugin.hive.s3.S3HiveQueryRunner;
 import io.trino.testing.QueryRunner;
@@ -48,7 +49,7 @@ public class TestHiveTaskFailureRecoveryTest
             throws Exception
     {
         String bucketName = "test-hive-insert-overwrite-" + randomNameSuffix(); // randomizing bucket name to ensure cached TrinoS3FileSystem objects are not reused
-        this.hiveMinioDataLake = new HiveMinioDataLake(bucketName);
+        this.hiveMinioDataLake = new Hive3MinioDataLake(bucketName);
         hiveMinioDataLake.start();
 
         this.minioStorage = new MinioStorage("test-exchange-spooling-" + randomNameSuffix());

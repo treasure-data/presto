@@ -20,6 +20,7 @@ import io.trino.testing.minio.MinioClient;
 import io.trino.util.AutoCloseableCloser;
 import org.testcontainers.containers.Network;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Map;
 
@@ -44,14 +45,14 @@ public class HiveMinioDataLake
     private final Minio minio;
     private final HiveHadoop hiveHadoop;
 
-    private final AutoCloseableCloser closer = AutoCloseableCloser.create();
-
-    private State state = State.INITIAL;
+    protected final AutoCloseableCloser closer = AutoCloseableCloser.create();
+    protected final Network network;
+    protected State state = State.INITIAL;
     private MinioClient minioClient;
 
     public HiveMinioDataLake(String bucketName)
     {
-        this(bucketName, HiveHadoop.DEFAULT_IMAGE);
+        this(bucketName, HiveHadoop.HIVE3_IMAGE);
     }
 
     public HiveMinioDataLake(String bucketName, String hiveHadoopImage)
@@ -62,7 +63,7 @@ public class HiveMinioDataLake
     public HiveMinioDataLake(String bucketName, Map<String, String> hiveHadoopFilesToMount, String hiveHadoopImage)
     {
         this.bucketName = requireNonNull(bucketName, "bucketName is null");
-        Network network = closer.register(newNetwork());
+        this.network = closer.register(newNetwork());
         this.minio = closer.register(
                 Minio.builder()
                         .withNetwork(network)
@@ -135,6 +136,11 @@ public class HiveMinioDataLake
         return hiveHadoop;
     }
 
+    public URI getHiveMetastoreEndpoint()
+    {
+        return hiveHadoop.getHiveMetastoreEndpoint();
+    }
+
     public String getBucketName()
     {
         return bucketName;
@@ -147,7 +153,7 @@ public class HiveMinioDataLake
         stop();
     }
 
-    private enum State
+    protected enum State
     {
         INITIAL,
         STARTING,

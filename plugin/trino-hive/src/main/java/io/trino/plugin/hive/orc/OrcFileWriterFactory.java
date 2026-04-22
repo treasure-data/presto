@@ -44,16 +44,16 @@ import org.weakref.jmx.Managed;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.Properties;
 import java.util.function.Supplier;
 
 import static io.trino.orc.metadata.OrcType.createRootOrcType;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_WRITER_OPEN_ERROR;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_WRITE_VALIDATION_FAILED;
-import static io.trino.plugin.hive.HiveMetadata.PRESTO_QUERY_ID_NAME;
-import static io.trino.plugin.hive.HiveMetadata.PRESTO_VERSION_NAME;
+import static io.trino.plugin.hive.HiveMetadata.TRINO_QUERY_ID_NAME;
+import static io.trino.plugin.hive.HiveMetadata.TRINO_VERSION_NAME;
 import static io.trino.plugin.hive.HiveSessionProperties.getOrcOptimizedWriterMaxDictionaryMemory;
 import static io.trino.plugin.hive.HiveSessionProperties.getOrcOptimizedWriterMaxStripeRows;
 import static io.trino.plugin.hive.HiveSessionProperties.getOrcOptimizedWriterMaxStripeSize;
@@ -125,7 +125,7 @@ public class OrcFileWriterFactory
             List<String> inputColumnNames,
             StorageFormat storageFormat,
             HiveCompressionCodec compressionCodec,
-            Properties schema,
+            Map<String, String> schema,
             ConnectorSession session,
             OptionalInt bucketNumber,
             AcidTransaction transaction,
@@ -199,8 +199,8 @@ public class OrcFileWriterFactory
                             .withMaxStringStatisticsLimit(getOrcStringStatisticsLimit(session)),
                     fileInputColumnIndexes,
                     ImmutableMap.<String, String>builder()
-                            .put(PRESTO_VERSION_NAME, nodeVersion.toString())
-                            .put(PRESTO_QUERY_ID_NAME, session.getQueryId())
+                            .put(TRINO_VERSION_NAME, nodeVersion.toString())
+                            .put(TRINO_QUERY_ID_NAME, session.getQueryId())
                             .buildOrThrow(),
                     validationInputFactory,
                     getOrcOptimizedWriterValidateMode(session),

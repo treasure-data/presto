@@ -26,11 +26,13 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 
 import java.io.File;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 public class ThriftMetastoreConfig
 {
-    private Duration metastoreTimeout = new Duration(10, TimeUnit.SECONDS);
+    private Duration connectTimeout = new Duration(10, TimeUnit.SECONDS);
+    private Duration readTimeout = new Duration(10, TimeUnit.SECONDS);
     private HostAndPort socksProxy;
     private int maxRetries = RetryDriver.DEFAULT_MAX_ATTEMPTS - 1;
     private double backoffScaleFactor = RetryDriver.DEFAULT_SCALE_FACTOR;
@@ -43,6 +45,7 @@ public class ThriftMetastoreConfig
     private long delegationTokenCacheMaximumSize = 1000;
     private boolean deleteFilesOnDrop;
     private Duration maxWaitForTransactionLock = new Duration(10, TimeUnit.MINUTES);
+    private String catalogName;
 
     private boolean tlsEnabled;
     private File keystorePath;
@@ -53,15 +56,32 @@ public class ThriftMetastoreConfig
     private int writeStatisticsThreads = 20;
 
     @NotNull
-    public Duration getMetastoreTimeout()
+    public Duration getConnectTimeout()
     {
-        return metastoreTimeout;
+        return connectTimeout;
     }
 
-    @Config("hive.metastore-timeout")
-    public ThriftMetastoreConfig setMetastoreTimeout(Duration metastoreTimeout)
+    @Config("hive.metastore.thrift.client.connect-timeout")
+    @LegacyConfig("hive.metastore-timeout")
+    @ConfigDescription("Socket connect timeout for metastore client")
+    public ThriftMetastoreConfig setConnectTimeout(Duration connectTimeout)
     {
-        this.metastoreTimeout = metastoreTimeout;
+        this.connectTimeout = connectTimeout;
+        return this;
+    }
+
+    @NotNull
+    public Duration getReadTimeout()
+    {
+        return readTimeout;
+    }
+
+    @Config("hive.metastore.thrift.client.read-timeout")
+    @LegacyConfig("hive.metastore-timeout")
+    @ConfigDescription("Socket read timeout for metastore client")
+    public ThriftMetastoreConfig setReadTimeout(Duration readTimeout)
+    {
+        this.readTimeout = readTimeout;
         return this;
     }
 
@@ -323,6 +343,19 @@ public class ThriftMetastoreConfig
     public ThriftMetastoreConfig setWriteStatisticsThreads(int writeStatisticsThreads)
     {
         this.writeStatisticsThreads = writeStatisticsThreads;
+        return this;
+    }
+
+    public Optional<String> getCatalogName()
+    {
+        return Optional.ofNullable(catalogName);
+    }
+
+    @Config("hive.metastore.thrift.catalog-name")
+    @ConfigDescription("Hive metastore thrift catalog name")
+    public ThriftMetastoreConfig setCatalogName(String catalogName)
+    {
+        this.catalogName = catalogName;
         return this;
     }
 }

@@ -40,6 +40,26 @@ public final class ParquetCompressionUtils
 
     private ParquetCompressionUtils() {}
 
+    public static Slice decompress(ParquetDataSourceId dataSourceId, CompressionCodec codec, Slice input, int uncompressedSize)
+            throws IOException
+    {
+        requireNonNull(input, "input is null");
+
+        if (input.length() == 0) {
+            return EMPTY_SLICE;
+        }
+
+        return switch (codec) {
+            case UNCOMPRESSED -> input;
+            case GZIP -> decompressGzip(input, uncompressedSize);
+            case SNAPPY -> decompressSnappy(input, uncompressedSize);
+            case LZO -> decompressLZO(input, uncompressedSize);
+            case LZ4 -> decompressLz4(input, uncompressedSize);
+            case ZSTD -> decompressZstd(input, uncompressedSize);
+            case BROTLI, LZ4_RAW -> throw new ParquetCorruptionException(dataSourceId, "Codec not supported in Parquet: %s", codec);
+        };
+    }
+
     public static Slice decompress(CompressionCodec codec, Slice input, int uncompressedSize)
             throws IOException
     {

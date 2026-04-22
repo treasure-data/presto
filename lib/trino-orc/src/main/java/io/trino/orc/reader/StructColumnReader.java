@@ -49,6 +49,7 @@ import static com.google.common.base.Verify.verify;
 import static io.airlift.slice.SizeOf.instanceSize;
 import static io.trino.orc.metadata.Stream.StreamKind.PRESENT;
 import static io.trino.orc.reader.ColumnReaders.createColumnReader;
+import static io.trino.orc.reader.ReaderUtils.toNotNullSupressedBlock;
 import static io.trino.orc.reader.ReaderUtils.verifyStreamType;
 import static io.trino.orc.stream.MissingInputStreamSource.missingStreamSource;
 import static java.util.Locale.ENGLISH;
@@ -151,19 +152,19 @@ public class StructColumnReader
         Block[] blocks;
 
         if (presentStream == null) {
-            blocks = getBlocksForType(nextBatchSize);
+            blocks = getBlocksForType(nextBatchSize, nextBatchSize, null);
         }
         else {
             nullVector = new boolean[nextBatchSize];
             int nullValues = presentStream.getUnsetBits(nextBatchSize, nullVector);
             if (nullValues != nextBatchSize) {
-                blocks = getBlocksForType(nextBatchSize - nullValues);
+                blocks = getBlocksForType(nextBatchSize, nextBatchSize - nullValues, nullVector);
             }
             else {
                 List<Type> typeParameters = type.getTypeParameters();
                 blocks = new Block[typeParameters.size()];
                 for (int i = 0; i < typeParameters.size(); i++) {
-                    blocks[i] = typeParameters.get(i).createBlockBuilder(null, 0).build();
+                    blocks[i] = RunLengthEncodedBlock.create(type.getFields().get(i).getType(), null, nextBatchSize);
                 }
             }
         }
@@ -234,7 +235,8 @@ public class StructColumnReader
                 .toString();
     }
 
-    private Block[] getBlocksForType(int positionCount)
+    private Block[] getBlocksForType(int positionCount, int nonNullCount, boolean[] nullVector)
+            throws IOException
     {
         Block[] blocks = new Block[fieldNames.size()];
 
@@ -243,8 +245,12 @@ public class StructColumnReader
 
             ColumnReader columnReader = structFields.get(fieldName);
             if (columnReader != null) {
-                columnReader.prepareNextRead(positionCount);
-                blocks[i] = blockFactory.createBlock(positionCount, columnReader::readBlock, true);
+                columnReader.prepareNextRead(nonNullCount);
+                Block block = columnReader.readBlock();
+                if (nullVector != null) {
+                    block = toNotNullSupressedBlock(positionCount, nullVector, block);
+                }
+                blocks[i] = block;
             }
             else {
                 blocks[i] = RunLengthEncodedBlock.create(type.getFields().get(i).getType(), null, positionCount);

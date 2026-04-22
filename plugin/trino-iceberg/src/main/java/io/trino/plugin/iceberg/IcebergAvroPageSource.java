@@ -49,11 +49,7 @@ public class IcebergAvroPageSource
     private final List<String> columnNames;
     private final List<Type> columnTypes;
     private final Map<String, org.apache.iceberg.types.Type> icebergTypes;
-    /**
-     * Indicates whether the column at each index should be populated with the
-     * indices of its rows
-     */
-    private final List<Boolean> rowIndexLocations;
+    private final boolean appendRowNumberColumn;
     private final PageBuilder pageBuilder;
     private final AggregatedMemoryContext memoryUsage;
 
@@ -69,16 +65,16 @@ public class IcebergAvroPageSource
             Optional<NameMapping> nameMapping,
             List<String> columnNames,
             List<Type> columnTypes,
-            List<Boolean> rowIndexLocations,
+            boolean appendRowNumberColumn,
             AggregatedMemoryContext memoryUsage)
     {
         this.columnNames = ImmutableList.copyOf(requireNonNull(columnNames, "columnNames is null"));
         this.columnTypes = ImmutableList.copyOf(requireNonNull(columnTypes, "columnTypes is null"));
-        this.rowIndexLocations = ImmutableList.copyOf(requireNonNull(rowIndexLocations, "rowIndexLocations is null"));
+        this.appendRowNumberColumn = appendRowNumberColumn;
         this.memoryUsage = requireNonNull(memoryUsage, "memoryUsage is null");
         checkArgument(
-                columnNames.size() == rowIndexLocations.size() && columnNames.size() == columnTypes.size(),
-                "names, rowIndexLocations, and types must correspond one-to-one-to-one");
+                columnNames.size() == columnTypes.size(),
+                "names and types must correspond one-to-one-to-one");
 
         // The column orders in the generated schema might be different from the original order
         Schema readSchema = fileSchema.select(columnNames);
@@ -92,11 +88,6 @@ public class IcebergAvroPageSource
                 .collect(toImmutableMap(Types.NestedField::name, Types.NestedField::type));
         pageBuilder = new PageBuilder(columnTypes);
         recordIterator = avroReader.iterator();
-    }
-
-    private boolean isIndexColumn(int column)
-    {
-        return rowIndexLocations.get(column);
     }
 
     @Override
@@ -131,13 +122,11 @@ public class IcebergAvroPageSource
             pageBuilder.declarePosition();
             Record record = recordIterator.next();
             for (int channel = 0; channel < columnTypes.size(); channel++) {
-                if (isIndexColumn(channel)) {
-                    BIGINT.writeLong(pageBuilder.getBlockBuilder(channel), rowId);
-                }
-                else {
-                    String name = columnNames.get(channel);
-                    serializeToTrinoBlock(columnTypes.get(channel), icebergTypes.get(name), pageBuilder.getBlockBuilder(channel), record.getField(name));
-                }
+                String name = columnNames.get(channel);
+                serializeToTrinoBlock(columnTypes.get(channel), icebergTypes.get(name), pageBuilder.getBlockBuilder(channel), record.getField(name));
+            }
+            if (appendRowNumberColumn) {
+                BIGINT.writeLong(pageBuilder.getBlockBuilder(columnTypes.size()), rowId);
             }
             rowId++;
         }

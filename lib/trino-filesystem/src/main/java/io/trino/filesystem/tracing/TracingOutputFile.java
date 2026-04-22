@@ -48,6 +48,26 @@ final class TracingOutputFile
     }
 
     @Override
+    public void createOrOverwrite(byte[] data)
+            throws IOException
+    {
+        Span span = tracer.spanBuilder("OutputFile.createOrOverwrite")
+                .setAttribute(FileSystemAttributes.FILE_LOCATION, toString())
+                .startSpan();
+        withTracing(span, () -> delegate.createOrOverwrite(data));
+    }
+
+    @Override
+    public void createExclusive(byte[] data)
+            throws IOException
+    {
+        Span span = tracer.spanBuilder("OutputFile.createExclusive")
+                .setAttribute(FileSystemAttributes.FILE_LOCATION, toString())
+                .startSpan();
+        withTracing(span, () -> delegate.createExclusive(data));
+    }
+
+    @Override
     public OutputStream createOrOverwrite()
             throws IOException
     {

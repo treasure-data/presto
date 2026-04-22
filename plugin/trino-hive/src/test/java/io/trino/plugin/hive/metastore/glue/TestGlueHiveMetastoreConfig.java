@@ -42,12 +42,12 @@ public class TestGlueHiveMetastoreConfig
                 .setAwsAccessKey(null)
                 .setAwsSecretKey(null)
                 .setAwsCredentialsProvider(null)
+                .setUseWebIdentityTokenCredentialsProvider(false)
                 .setCatalogId(null)
                 .setPartitionSegments(5)
-                .setGetPartitionThreads(20)
+                .setThreads(40)
                 .setAssumeCanonicalPartitionKeys(false)
-                .setReadStatisticsThreads(5)
-                .setWriteStatisticsThreads(20));
+                .setSkipArchive(false));
     }
 
     @Test
@@ -69,11 +69,11 @@ public class TestGlueHiveMetastoreConfig
                 .put("hive.metastore.glue.aws-secret-key", "DEF")
                 .put("hive.metastore.glue.aws-credentials-provider", "custom")
                 .put("hive.metastore.glue.catalogid", "0123456789")
+                .put("hive.metastore.glue.use-web-identity-token-credentials-provider", "true")
                 .put("hive.metastore.glue.partitions-segments", "10")
                 .put("hive.metastore.glue.get-partition-threads", "42")
                 .put("hive.metastore.glue.assume-canonical-partition-keys", "true")
-                .put("hive.metastore.glue.read-statistics-threads", "42")
-                .put("hive.metastore.glue.write-statistics-threads", "43")
+                .put("hive.metastore.glue.skip-archive", "true")
                 .buildOrThrow();
 
         GlueHiveMetastoreConfig expected = new GlueHiveMetastoreConfig()
@@ -91,12 +91,12 @@ public class TestGlueHiveMetastoreConfig
                 .setAwsAccessKey("ABC")
                 .setAwsSecretKey("DEF")
                 .setAwsCredentialsProvider("custom")
+                .setUseWebIdentityTokenCredentialsProvider(true)
                 .setCatalogId("0123456789")
                 .setPartitionSegments(10)
-                .setGetPartitionThreads(42)
+                .setThreads(42)
                 .setAssumeCanonicalPartitionKeys(true)
-                .setReadStatisticsThreads(42)
-                .setWriteStatisticsThreads(43);
+                .setSkipArchive(true);
 
         assertFullMapping(properties, expected);
     }

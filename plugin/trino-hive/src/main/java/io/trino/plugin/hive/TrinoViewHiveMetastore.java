@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableMap;
 import io.trino.plugin.hive.metastore.Column;
 import io.trino.plugin.hive.metastore.HiveMetastore;
 import io.trino.plugin.hive.metastore.PrincipalPrivileges;
+import io.trino.plugin.hive.metastore.TableInfo;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorViewDefinition;
@@ -32,9 +33,7 @@ import java.util.Optional;
 import java.util.stream.Stream;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static io.trino.plugin.hive.HiveMetadata.PRESTO_VIEW_COMMENT;
 import static io.trino.plugin.hive.HiveMetadata.PRESTO_VIEW_EXPANDED_TEXT_MARKER;
-import static io.trino.plugin.hive.HiveMetadata.TABLE_COMMENT;
 import static io.trino.plugin.hive.HiveType.HIVE_STRING;
 import static io.trino.plugin.hive.TableType.VIRTUAL_VIEW;
 import static io.trino.plugin.hive.TrinoViewUtil.createViewProperties;
@@ -73,7 +72,7 @@ public final class TrinoViewHiveMetastore
                 .setTableName(schemaViewName.getTableName())
                 .setOwner(isUsingSystemSecurity ? Optional.empty() : Optional.of(session.getUser()))
                 .setTableType(VIRTUAL_VIEW.name())
-                .setDataColumns(ImmutableList.of(new Column("dummy", HIVE_STRING, Optional.empty())))
+                .setDataColumns(ImmutableList.of(new Column("dummy", HIVE_STRING, Optional.empty(), Map.of())))
                 .setPartitionColumns(ImmutableList.of())
                 .setParameters(createViewProperties(session, trinoVersion, connectorName))
                 .setViewOriginalText(Optional.of(encodeViewData(definition)))
@@ -91,7 +90,7 @@ public final class TrinoViewHiveMetastore
                 throw new ViewAlreadyExistsException(schemaViewName);
             }
 
-            metastore.replaceTable(schemaViewName.getSchemaName(), schemaViewName.getTableName(), table, principalPrivileges);
+            metastore.replaceTable(schemaViewName.getSchemaName(), schemaViewName.getTableName(), table, principalPrivileges, ImmutableMap.of());
             return;
         }
 
@@ -157,8 +156,9 @@ public final class TrinoViewHiveMetastore
     private Stream<SchemaTableName> listViews(String schema)
     {
         // Filter on PRESTO_VIEW_COMMENT to distinguish from materialized views
-        return metastore.getTablesWithParameter(schema, TABLE_COMMENT, PRESTO_VIEW_COMMENT).stream()
-                .map(table -> new SchemaTableName(schema, table));
+        return metastore.getTables(schema).stream()
+                .filter(tableInfo -> tableInfo.extendedRelationType() == TableInfo.ExtendedRelationType.TRINO_VIEW)
+                .map(TableInfo::tableName);
     }
 
     public Optional<ConnectorViewDefinition> getView(SchemaTableName viewName)
@@ -168,7 +168,6 @@ public final class TrinoViewHiveMetastore
         }
         return metastore.getTable(viewName.getSchemaName(), viewName.getTableName())
                 .flatMap(view -> TrinoViewUtil.getView(
-                        viewName,
                         view.getViewOriginalText(),
                         view.getTableType(),
                         view.getParameters(),
@@ -180,7 +179,7 @@ public final class TrinoViewHiveMetastore
         io.trino.plugin.hive.metastore.Table view = metastore.getTable(viewName.getSchemaName(), viewName.getTableName())
                 .orElseThrow(() -> new ViewNotFoundException(viewName));
 
-        ConnectorViewDefinition definition = TrinoViewUtil.getView(viewName, view.getViewOriginalText(), view.getTableType(), view.getParameters(), view.getOwner())
+        ConnectorViewDefinition definition = TrinoViewUtil.getView(view.getViewOriginalText(), view.getTableType(), view.getParameters(), view.getOwner())
                 .orElseThrow(() -> new ViewNotFoundException(viewName));
         ConnectorViewDefinition newDefinition = new ConnectorViewDefinition(
                 definition.getOriginalSql(),
@@ -199,7 +198,7 @@ public final class TrinoViewHiveMetastore
         io.trino.plugin.hive.metastore.Table view = metastore.getTable(viewName.getSchemaName(), viewName.getTableName())
                 .orElseThrow(() -> new ViewNotFoundException(viewName));
 
-        ConnectorViewDefinition definition = TrinoViewUtil.getView(viewName, view.getViewOriginalText(), view.getTableType(), view.getParameters(), view.getOwner())
+        ConnectorViewDefinition definition = TrinoViewUtil.getView(view.getViewOriginalText(), view.getTableType(), view.getParameters(), view.getOwner())
                 .orElseThrow(() -> new ViewNotFoundException(viewName));
         ConnectorViewDefinition newDefinition = new ConnectorViewDefinition(
                 definition.getOriginalSql(),
@@ -222,6 +221,6 @@ public final class TrinoViewHiveMetastore
 
         PrincipalPrivileges principalPrivileges = isUsingSystemSecurity ? NO_PRIVILEGES : buildInitialPrivilegeSet(session.getUser());
 
-        metastore.replaceTable(viewName.getSchemaName(), viewName.getTableName(), viewBuilder.build(), principalPrivileges);
+        metastore.replaceTable(viewName.getSchemaName(), viewName.getTableName(), viewBuilder.build(), principalPrivileges, ImmutableMap.of());
     }
 }

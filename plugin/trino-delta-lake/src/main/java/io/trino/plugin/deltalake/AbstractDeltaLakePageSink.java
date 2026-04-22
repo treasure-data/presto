@@ -443,7 +443,8 @@ public abstract class AbstractDeltaLakePageSink
                 .setMaxBlockSize(getParquetWriterBlockSize(session))
                 .setMaxPageSize(getParquetWriterPageSize(session))
                 .build();
-        CompressionCodec compressionCodec = getCompressionCodec(session).getParquetCompressionCodec();
+        CompressionCodec compressionCodec = getCompressionCodec(session).getParquetCompressionCodec()
+                .orElseThrow(); // validated on the session property level
 
         try {
             Closeable rollbackAction = () -> fileSystem.deleteFile(path);
@@ -470,7 +471,6 @@ public abstract class AbstractDeltaLakePageSink
                     identityMapping,
                     compressionCodec,
                     trinoVersion,
-                    false,
                     Optional.empty(),
                     Optional.empty());
         }

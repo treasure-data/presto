@@ -21,7 +21,6 @@ import io.trino.spi.connector.ConnectorPartitioningHandle;
 
 import java.util.List;
 import java.util.Objects;
-import java.util.OptionalInt;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static java.util.Objects.requireNonNull;
@@ -32,7 +31,6 @@ public class HivePartitioningHandle
     private final BucketingVersion bucketingVersion;
     private final int bucketCount;
     private final List<HiveType> hiveTypes;
-    private final OptionalInt maxCompatibleBucketCount;
     private final boolean usePartitionedBucketing;
 
     @JsonCreator
@@ -40,13 +38,11 @@ public class HivePartitioningHandle
             @JsonProperty("bucketingVersion") BucketingVersion bucketingVersion,
             @JsonProperty("bucketCount") int bucketCount,
             @JsonProperty("hiveBucketTypes") List<HiveType> hiveTypes,
-            @JsonProperty("maxCompatibleBucketCount") OptionalInt maxCompatibleBucketCount,
             @JsonProperty("usePartitionedBucketing") boolean usePartitionedBucketing)
     {
         this.bucketingVersion = requireNonNull(bucketingVersion, "bucketingVersion is null");
         this.bucketCount = bucketCount;
         this.hiveTypes = requireNonNull(hiveTypes, "hiveTypes is null");
-        this.maxCompatibleBucketCount = maxCompatibleBucketCount;
         this.usePartitionedBucketing = usePartitionedBucketing;
     }
 
@@ -66,12 +62,6 @@ public class HivePartitioningHandle
     public List<HiveType> getHiveTypes()
     {
         return hiveTypes;
-    }
-
-    @JsonProperty
-    public OptionalInt getMaxCompatibleBucketCount()
-    {
-        return maxCompatibleBucketCount;
     }
 
     @JsonProperty

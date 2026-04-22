@@ -15,13 +15,12 @@ package io.trino.plugin.hive;
 
 import com.google.common.collect.ImmutableMap;
 import io.trino.Session;
+import io.trino.plugin.hive.metastore.glue.GlueHiveMetastore;
 import io.trino.spi.security.Identity;
 import io.trino.spi.security.SelectedRole;
-import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.QueryRunner;
 import org.testng.annotations.Test;
 
-import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
@@ -29,7 +28,7 @@ import java.util.Set;
 import static io.trino.plugin.hive.BaseS3AndGlueMetastoreTest.LocationPattern.DOUBLE_SLASH;
 import static io.trino.plugin.hive.BaseS3AndGlueMetastoreTest.LocationPattern.TRIPLE_SLASH;
 import static io.trino.plugin.hive.BaseS3AndGlueMetastoreTest.LocationPattern.TWO_TRAILING_SLASHES;
-import static io.trino.plugin.hive.metastore.glue.GlueHiveMetastore.createTestingGlueHiveMetastore;
+import static io.trino.plugin.hive.TestingHiveUtils.getConnectorService;
 import static io.trino.spi.security.SelectedRole.Type.ROLE;
 import static io.trino.testing.TestingNames.randomNameSuffix;
 import static io.trino.testing.TestingSession.testSessionBuilder;
@@ -49,16 +48,25 @@ public class TestHiveS3AndGlueMetastoreTest
     protected QueryRunner createQueryRunner()
             throws Exception
     {
-        metastore = createTestingGlueHiveMetastore(Path.of(schemaPath()));
-
         Session session = createSession(Optional.of(new SelectedRole(ROLE, Optional.of("admin"))));
-        DistributedQueryRunner queryRunner = HiveQueryRunner.builder(session)
+        QueryRunner queryRunner = HiveQueryRunner.builder(session)
+                .addExtraProperty("sql.path", "hive.functions")
+                .addExtraProperty("sql.default-function-catalog", "hive")
+                .addExtraProperty("sql.default-function-schema", "functions")
                 .setCreateTpchSchemas(false)
+                .addHiveProperty("hive.metastore", "glue")
+                .addHiveProperty("hive.metastore.glue.default-warehouse-dir", schemaPath())
                 .addHiveProperty("hive.security", "allow-all")
                 .addHiveProperty("hive.non-managed-table-writes-enabled", "true")
-                .setMetastore(runner -> metastore)
+                .addHiveProperty("hive.partition-projection-enabled", "true")
+                .addHiveProperty("fs.hadoop.enabled", "false")
+                .addHiveProperty("fs.native-s3.enabled", "true")
                 .build();
         queryRunner.execute("CREATE SCHEMA " + schemaName + " WITH (location = '" + schemaPath() + "')");
+        queryRunner.execute("CREATE SCHEMA IF NOT EXISTS functions");
+
+        metastore = getConnectorService(queryRunner, GlueHiveMetastore.class);
+
         return queryRunner;
     }
 

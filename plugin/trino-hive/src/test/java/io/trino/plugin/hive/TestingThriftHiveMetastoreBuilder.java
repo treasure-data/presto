@@ -14,8 +14,9 @@
 package io.trino.plugin.hive;
 
 import com.google.common.collect.ImmutableSet;
-import com.google.common.net.HostAndPort;
 import io.airlift.units.Duration;
+import io.trino.filesystem.TrinoFileSystemFactory;
+import io.trino.filesystem.hdfs.HdfsFileSystemFactory;
 import io.trino.hdfs.DynamicHdfsConfiguration;
 import io.trino.hdfs.HdfsConfig;
 import io.trino.hdfs.HdfsConfigurationInitializer;
@@ -36,10 +37,14 @@ import io.trino.plugin.hive.metastore.thrift.ThriftMetastoreConfig;
 import io.trino.plugin.hive.metastore.thrift.TokenAwareMetastoreClientFactory;
 import io.trino.plugin.hive.metastore.thrift.UgiBasedMetastoreClientFactory;
 
+import java.net.URI;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
+import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkState;
 import static io.trino.plugin.base.security.UserNameProvider.SIMPLE_USER_NAME_PROVIDER;
+import static io.trino.plugin.hive.HiveTestUtils.HDFS_FILE_SYSTEM_STATS;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newFixedThreadPool;
 
@@ -59,9 +64,8 @@ public final class TestingThriftHiveMetastoreBuilder
             new NoHdfsAuthentication());
 
     private TokenAwareMetastoreClientFactory tokenAwareMetastoreClientFactory;
-    private HiveConfig hiveConfig = new HiveConfig();
     private ThriftMetastoreConfig thriftMetastoreConfig = new ThriftMetastoreConfig();
-    private HdfsEnvironment hdfsEnvironment = HDFS_ENVIRONMENT;
+    private TrinoFileSystemFactory fileSystemFactory = new HdfsFileSystemFactory(HDFS_ENVIRONMENT, HDFS_FILE_SYSTEM_STATS);
 
     public static TestingThriftHiveMetastoreBuilder testingThriftHiveMetastoreBuilder()
     {
@@ -70,7 +74,7 @@ public final class TestingThriftHiveMetastoreBuilder
 
     private TestingThriftHiveMetastoreBuilder() {}
 
-    public TestingThriftHiveMetastoreBuilder metastoreClient(HostAndPort address, Duration timeout)
+    public TestingThriftHiveMetastoreBuilder metastoreClient(URI address, Duration timeout)
     {
         requireNonNull(address, "address is null");
         requireNonNull(timeout, "timeout is null");
@@ -79,7 +83,7 @@ public final class TestingThriftHiveMetastoreBuilder
         return this;
     }
 
-    public TestingThriftHiveMetastoreBuilder metastoreClient(HostAndPort address)
+    public TestingThriftHiveMetastoreBuilder metastoreClient(URI address)
     {
         requireNonNull(address, "address is null");
         checkState(tokenAwareMetastoreClientFactory == null, "Metastore client already set");
@@ -95,34 +99,23 @@ public final class TestingThriftHiveMetastoreBuilder
         return this;
     }
 
-    public TestingThriftHiveMetastoreBuilder hiveConfig(HiveConfig hiveConfig)
-    {
-        this.hiveConfig = requireNonNull(hiveConfig, "hiveConfig is null");
-        return this;
-    }
-
     public TestingThriftHiveMetastoreBuilder thriftMetastoreConfig(ThriftMetastoreConfig thriftMetastoreConfig)
     {
         this.thriftMetastoreConfig = requireNonNull(thriftMetastoreConfig, "thriftMetastoreConfig is null");
         return this;
     }
 
-    public TestingThriftHiveMetastoreBuilder hdfsEnvironment(HdfsEnvironment hdfsEnvironment)
-    {
-        this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
-        return this;
-    }
-
-    public ThriftMetastore build()
+    public ThriftMetastore build(Consumer<AutoCloseable> registerResource)
     {
         checkState(tokenAwareMetastoreClientFactory != null, "metastore client not set");
+        ExecutorService executorService = newFixedThreadPool(thriftMetastoreConfig.getWriteStatisticsThreads());
+        registerResource.accept(executorService::shutdown);
         ThriftHiveMetastoreFactory metastoreFactory = new ThriftHiveMetastoreFactory(
                 new UgiBasedMetastoreClientFactory(tokenAwareMetastoreClientFactory, SIMPLE_USER_NAME_PROVIDER, thriftMetastoreConfig),
                 new HiveMetastoreConfig().isHideDeltaLakeTables(),
-                hiveConfig.isTranslateHiveViews(),
                 thriftMetastoreConfig,
-                hdfsEnvironment,
-                newFixedThreadPool(thriftMetastoreConfig.getWriteStatisticsThreads()));
+                fileSystemFactory,
+                executorService);
         return metastoreFactory.createMetastore(Optional.empty());
     }
 }

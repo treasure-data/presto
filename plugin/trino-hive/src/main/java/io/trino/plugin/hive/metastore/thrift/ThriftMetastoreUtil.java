@@ -21,6 +21,7 @@ import com.google.common.primitives.Shorts;
 import io.trino.hive.thrift.metastore.BinaryColumnStatsData;
 import io.trino.hive.thrift.metastore.BooleanColumnStatsData;
 import io.trino.hive.thrift.metastore.ColumnStatisticsObj;
+import io.trino.hive.thrift.metastore.DataOperationType;
 import io.trino.hive.thrift.metastore.Date;
 import io.trino.hive.thrift.metastore.DateColumnStatsData;
 import io.trino.hive.thrift.metastore.Decimal;
@@ -39,6 +40,7 @@ import io.trino.plugin.hive.HiveBasicStatistics;
 import io.trino.plugin.hive.HiveBucketProperty;
 import io.trino.plugin.hive.HiveColumnStatisticType;
 import io.trino.plugin.hive.HiveType;
+import io.trino.plugin.hive.acid.AcidOperation;
 import io.trino.plugin.hive.metastore.Column;
 import io.trino.plugin.hive.metastore.Database;
 import io.trino.plugin.hive.metastore.HiveColumnStatistics;
@@ -486,39 +488,39 @@ public final class ThriftMetastoreUtil
         return partitionBuilder.build();
     }
 
-    public static HiveColumnStatistics fromMetastoreApiColumnStatistics(ColumnStatisticsObj columnStatistics, OptionalLong rowCount)
+    public static HiveColumnStatistics fromMetastoreApiColumnStatistics(ColumnStatisticsObj columnStatistics)
     {
         if (columnStatistics.getStatsData().isSetLongStats()) {
             LongColumnStatsData longStatsData = columnStatistics.getStatsData().getLongStats();
             OptionalLong min = longStatsData.isSetLowValue() ? OptionalLong.of(longStatsData.getLowValue()) : OptionalLong.empty();
             OptionalLong max = longStatsData.isSetHighValue() ? OptionalLong.of(longStatsData.getHighValue()) : OptionalLong.empty();
             OptionalLong nullsCount = longStatsData.isSetNumNulls() ? fromMetastoreNullsCount(longStatsData.getNumNulls()) : OptionalLong.empty();
-            OptionalLong distinctValuesCount = longStatsData.isSetNumDVs() ? OptionalLong.of(longStatsData.getNumDVs()) : OptionalLong.empty();
-            return createIntegerColumnStatistics(min, max, nullsCount, fromMetastoreDistinctValuesCount(distinctValuesCount, nullsCount, rowCount));
+            OptionalLong distinctValuesWithNullCount = longStatsData.isSetNumDVs() ? OptionalLong.of(longStatsData.getNumDVs()) : OptionalLong.empty();
+            return createIntegerColumnStatistics(min, max, nullsCount, distinctValuesWithNullCount);
         }
         if (columnStatistics.getStatsData().isSetDoubleStats()) {
             DoubleColumnStatsData doubleStatsData = columnStatistics.getStatsData().getDoubleStats();
             OptionalDouble min = doubleStatsData.isSetLowValue() ? OptionalDouble.of(doubleStatsData.getLowValue()) : OptionalDouble.empty();
             OptionalDouble max = doubleStatsData.isSetHighValue() ? OptionalDouble.of(doubleStatsData.getHighValue()) : OptionalDouble.empty();
             OptionalLong nullsCount = doubleStatsData.isSetNumNulls() ? fromMetastoreNullsCount(doubleStatsData.getNumNulls()) : OptionalLong.empty();
-            OptionalLong distinctValuesCount = doubleStatsData.isSetNumDVs() ? OptionalLong.of(doubleStatsData.getNumDVs()) : OptionalLong.empty();
-            return createDoubleColumnStatistics(min, max, nullsCount, fromMetastoreDistinctValuesCount(distinctValuesCount, nullsCount, rowCount));
+            OptionalLong distinctValuesWithNullCount = doubleStatsData.isSetNumDVs() ? OptionalLong.of(doubleStatsData.getNumDVs()) : OptionalLong.empty();
+            return createDoubleColumnStatistics(min, max, nullsCount, distinctValuesWithNullCount);
         }
         if (columnStatistics.getStatsData().isSetDecimalStats()) {
             DecimalColumnStatsData decimalStatsData = columnStatistics.getStatsData().getDecimalStats();
             Optional<BigDecimal> min = decimalStatsData.isSetLowValue() ? fromMetastoreDecimal(decimalStatsData.getLowValue()) : Optional.empty();
             Optional<BigDecimal> max = decimalStatsData.isSetHighValue() ? fromMetastoreDecimal(decimalStatsData.getHighValue()) : Optional.empty();
             OptionalLong nullsCount = decimalStatsData.isSetNumNulls() ? fromMetastoreNullsCount(decimalStatsData.getNumNulls()) : OptionalLong.empty();
-            OptionalLong distinctValuesCount = decimalStatsData.isSetNumDVs() ? OptionalLong.of(decimalStatsData.getNumDVs()) : OptionalLong.empty();
-            return createDecimalColumnStatistics(min, max, nullsCount, fromMetastoreDistinctValuesCount(distinctValuesCount, nullsCount, rowCount));
+            OptionalLong distinctValuesWithNullCount = decimalStatsData.isSetNumDVs() ? OptionalLong.of(decimalStatsData.getNumDVs()) : OptionalLong.empty();
+            return createDecimalColumnStatistics(min, max, nullsCount, distinctValuesWithNullCount);
         }
         if (columnStatistics.getStatsData().isSetDateStats()) {
             DateColumnStatsData dateStatsData = columnStatistics.getStatsData().getDateStats();
             Optional<LocalDate> min = dateStatsData.isSetLowValue() ? fromMetastoreDate(dateStatsData.getLowValue()) : Optional.empty();
             Optional<LocalDate> max = dateStatsData.isSetHighValue() ? fromMetastoreDate(dateStatsData.getHighValue()) : Optional.empty();
             OptionalLong nullsCount = dateStatsData.isSetNumNulls() ? fromMetastoreNullsCount(dateStatsData.getNumNulls()) : OptionalLong.empty();
-            OptionalLong distinctValuesCount = dateStatsData.isSetNumDVs() ? OptionalLong.of(dateStatsData.getNumDVs()) : OptionalLong.empty();
-            return createDateColumnStatistics(min, max, nullsCount, fromMetastoreDistinctValuesCount(distinctValuesCount, nullsCount, rowCount));
+            OptionalLong distinctValuesWithNullCount = dateStatsData.isSetNumDVs() ? OptionalLong.of(dateStatsData.getNumDVs()) : OptionalLong.empty();
+            return createDateColumnStatistics(min, max, nullsCount, distinctValuesWithNullCount);
         }
         if (columnStatistics.getStatsData().isSetBooleanStats()) {
             BooleanColumnStatsData booleanStatsData = columnStatistics.getStatsData().getBooleanStats();
@@ -539,12 +541,12 @@ public final class ThriftMetastoreUtil
             OptionalLong maxColumnLength = stringStatsData.isSetMaxColLen() ? OptionalLong.of(stringStatsData.getMaxColLen()) : OptionalLong.empty();
             OptionalDouble averageColumnLength = stringStatsData.isSetAvgColLen() ? OptionalDouble.of(stringStatsData.getAvgColLen()) : OptionalDouble.empty();
             OptionalLong nullsCount = stringStatsData.isSetNumNulls() ? fromMetastoreNullsCount(stringStatsData.getNumNulls()) : OptionalLong.empty();
-            OptionalLong distinctValuesCount = stringStatsData.isSetNumDVs() ? OptionalLong.of(stringStatsData.getNumDVs()) : OptionalLong.empty();
+            OptionalLong distinctValuesWithNullCount = stringStatsData.isSetNumDVs() ? OptionalLong.of(stringStatsData.getNumDVs()) : OptionalLong.empty();
             return createStringColumnStatistics(
                     maxColumnLength,
-                    getTotalSizeInBytes(averageColumnLength, rowCount, nullsCount),
+                    averageColumnLength,
                     nullsCount,
-                    fromMetastoreDistinctValuesCount(distinctValuesCount, nullsCount, rowCount));
+                    distinctValuesWithNullCount);
         }
         if (columnStatistics.getStatsData().isSetBinaryStats()) {
             BinaryColumnStatsData binaryStatsData = columnStatistics.getStatsData().getBinaryStats();
@@ -553,7 +555,7 @@ public final class ThriftMetastoreUtil
             OptionalLong nullsCount = binaryStatsData.isSetNumNulls() ? fromMetastoreNullsCount(binaryStatsData.getNumNulls()) : OptionalLong.empty();
             return createBinaryColumnStatistics(
                     maxColumnLength,
-                    getTotalSizeInBytes(averageColumnLength, rowCount, nullsCount),
+                    averageColumnLength,
                     nullsCount);
         }
         throw new TrinoException(HIVE_INVALID_METADATA, "Invalid column statistics data: " + columnStatistics);
@@ -671,7 +673,7 @@ public final class ThriftMetastoreUtil
 
     private static Column fromMetastoreApiFieldSchema(FieldSchema fieldSchema)
     {
-        return new Column(fieldSchema.getName(), HiveType.valueOf(fieldSchema.getType()), Optional.ofNullable(fieldSchema.getComment()));
+        return new Column(fieldSchema.getName(), HiveType.valueOf(fieldSchema.getType()), Optional.ofNullable(fieldSchema.getComment()), ImmutableMap.of());
     }
 
     private static void fromMetastoreApiStorageDescriptor(
@@ -789,7 +791,7 @@ public final class ThriftMetastoreUtil
         return result.buildOrThrow();
     }
 
-    public static ColumnStatisticsObj createMetastoreColumnStatistics(String columnName, HiveType columnType, HiveColumnStatistics statistics, OptionalLong rowCount)
+    public static ColumnStatisticsObj createMetastoreColumnStatistics(String columnName, HiveType columnType, HiveColumnStatistics statistics)
     {
         TypeInfo typeInfo = columnType.getTypeInfo();
         checkArgument(typeInfo.getCategory() == PRIMITIVE, "unsupported type: %s", columnType);
@@ -808,11 +810,11 @@ public final class ThriftMetastoreUtil
             case STRING:
             case VARCHAR:
             case CHAR:
-                return createStringStatistics(columnName, columnType, statistics, rowCount);
+                return createStringStatistics(columnName, columnType, statistics);
             case DATE:
                 return createDateStatistics(columnName, columnType, statistics);
             case BINARY:
-                return createBinaryStatistics(columnName, columnType, statistics, rowCount);
+                return createBinaryStatistics(columnName, columnType, statistics);
             case DECIMAL:
                 return createDecimalStatistics(columnName, columnType, statistics);
 
@@ -846,7 +848,7 @@ public final class ThriftMetastoreUtil
             integerStatistics.getMax().ifPresent(data::setHighValue);
         });
         statistics.getNullsCount().ifPresent(data::setNumNulls);
-        toMetastoreDistinctValuesCount(statistics.getDistinctValuesCount(), statistics.getNullsCount()).ifPresent(data::setNumDVs);
+        toMetastoreDistinctValuesCount(statistics.getDistinctValuesWithNullCount(), statistics.getNullsCount()).ifPresent(data::setNumDVs);
         return new ColumnStatisticsObj(columnName, columnType.toString(), longStats(data));
     }
 
@@ -858,17 +860,17 @@ public final class ThriftMetastoreUtil
             doubleStatistics.getMax().ifPresent(data::setHighValue);
         });
         statistics.getNullsCount().ifPresent(data::setNumNulls);
-        toMetastoreDistinctValuesCount(statistics.getDistinctValuesCount(), statistics.getNullsCount()).ifPresent(data::setNumDVs);
+        toMetastoreDistinctValuesCount(statistics.getDistinctValuesWithNullCount(), statistics.getNullsCount()).ifPresent(data::setNumDVs);
         return new ColumnStatisticsObj(columnName, columnType.toString(), doubleStats(data));
     }
 
-    private static ColumnStatisticsObj createStringStatistics(String columnName, HiveType columnType, HiveColumnStatistics statistics, OptionalLong rowCount)
+    private static ColumnStatisticsObj createStringStatistics(String columnName, HiveType columnType, HiveColumnStatistics statistics)
     {
         StringColumnStatsData data = new StringColumnStatsData();
         statistics.getNullsCount().ifPresent(data::setNumNulls);
-        toMetastoreDistinctValuesCount(statistics.getDistinctValuesCount(), statistics.getNullsCount()).ifPresent(data::setNumDVs);
+        statistics.getDistinctValuesWithNullCount().ifPresent(data::setNumDVs);
         data.setMaxColLen(statistics.getMaxValueSizeInBytes().orElse(0));
-        data.setAvgColLen(getAverageColumnLength(statistics.getTotalSizeInBytes(), rowCount, statistics.getNullsCount()).orElse(0));
+        data.setAvgColLen(statistics.getAverageColumnLength().orElse(0));
         return new ColumnStatisticsObj(columnName, columnType.toString(), stringStats(data));
     }
 
@@ -880,16 +882,16 @@ public final class ThriftMetastoreUtil
             dateStatistics.getMax().ifPresent(value -> data.setHighValue(toMetastoreDate(value)));
         });
         statistics.getNullsCount().ifPresent(data::setNumNulls);
-        toMetastoreDistinctValuesCount(statistics.getDistinctValuesCount(), statistics.getNullsCount()).ifPresent(data::setNumDVs);
+        statistics.getDistinctValuesWithNullCount().ifPresent(data::setNumDVs);
         return new ColumnStatisticsObj(columnName, columnType.toString(), dateStats(data));
     }
 
-    private static ColumnStatisticsObj createBinaryStatistics(String columnName, HiveType columnType, HiveColumnStatistics statistics, OptionalLong rowCount)
+    private static ColumnStatisticsObj createBinaryStatistics(String columnName, HiveType columnType, HiveColumnStatistics statistics)
     {
         BinaryColumnStatsData data = new BinaryColumnStatsData();
         statistics.getNullsCount().ifPresent(data::setNumNulls);
         data.setMaxColLen(statistics.getMaxValueSizeInBytes().orElse(0));
-        data.setAvgColLen(getAverageColumnLength(statistics.getTotalSizeInBytes(), rowCount, statistics.getNullsCount()).orElse(0));
+        data.setAvgColLen(statistics.getAverageColumnLength().orElse(0));
         return new ColumnStatisticsObj(columnName, columnType.toString(), binaryStats(data));
     }
 
@@ -901,7 +903,7 @@ public final class ThriftMetastoreUtil
             decimalStatistics.getMax().ifPresent(value -> data.setHighValue(toMetastoreDecimal(value)));
         });
         statistics.getNullsCount().ifPresent(data::setNumNulls);
-        toMetastoreDistinctValuesCount(statistics.getDistinctValuesCount(), statistics.getNullsCount()).ifPresent(data::setNumDVs);
+        statistics.getDistinctValuesWithNullCount().ifPresent(data::setNumDVs);
         return new ColumnStatisticsObj(columnName, columnType.toString(), decimalStats(data));
     }
 
@@ -967,5 +969,23 @@ public final class ThriftMetastoreUtil
         return type.equals(BIGINT) || type.equals(INTEGER) || type.equals(SMALLINT) || type.equals(TINYINT) ||
                 type.equals(DOUBLE) || type.equals(REAL) ||
                 type instanceof DecimalType;
+    }
+
+    public static DataOperationType toDataOperationType(AcidOperation acidOperation)
+    {
+        return switch (acidOperation) {
+            case INSERT -> DataOperationType.INSERT;
+            case MERGE -> DataOperationType.UPDATE;
+            default -> throw new IllegalStateException("No metastore operation for ACID operation " + acidOperation);
+        };
+    }
+
+    public static boolean isAvroTableWithSchemaSet(Table table)
+    {
+        return AVRO.getSerde().equals(table.getStorage().getStorageFormat().getSerDeNullable()) &&
+                ((table.getParameters().get(AVRO_SCHEMA_URL_KEY) != null ||
+                        (table.getStorage().getSerdeParameters().get(AVRO_SCHEMA_URL_KEY) != null)) ||
+                 (table.getParameters().get(AVRO_SCHEMA_LITERAL_KEY) != null ||
+                        (table.getStorage().getSerdeParameters().get(AVRO_SCHEMA_LITERAL_KEY) != null)));
     }
 }

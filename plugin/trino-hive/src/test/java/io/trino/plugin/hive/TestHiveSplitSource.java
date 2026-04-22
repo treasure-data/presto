@@ -14,9 +14,11 @@
 package io.trino.plugin.hive;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.SettableFuture;
 import io.airlift.stats.CounterStat;
 import io.airlift.units.DataSize;
+import io.trino.filesystem.cache.DefaultCachingHostAddressProvider;
 import io.trino.spi.connector.ConnectorSplit;
 import io.trino.spi.connector.ConnectorSplitSource;
 import org.testng.annotations.Test;
@@ -38,6 +40,7 @@ import static io.trino.plugin.hive.HiveSessionProperties.getMaxInitialSplitSize;
 import static io.trino.plugin.hive.HiveTestUtils.SESSION;
 import static io.trino.testing.assertions.TrinoExceptionAssert.assertTrinoExceptionThrownBy;
 import static java.lang.Math.toIntExact;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
@@ -58,6 +61,7 @@ public class TestHiveSplitSource
                 new TestingHiveSplitLoader(),
                 Executors.newFixedThreadPool(5),
                 new CounterStat(),
+                new DefaultCachingHostAddressProvider(),
                 false);
 
         // add 10 splits
@@ -93,6 +97,7 @@ public class TestHiveSplitSource
                 new TestingHiveSplitLoader(),
                 Executors.newFixedThreadPool(5),
                 new CounterStat(),
+                new DefaultCachingHostAddressProvider(),
                 false);
 
         // add two splits, one of the splits is dynamically pruned
@@ -120,6 +125,7 @@ public class TestHiveSplitSource
                 new TestingHiveSplitLoader(),
                 Executors.newSingleThreadExecutor(),
                 new CounterStat(),
+                new DefaultCachingHostAddressProvider(),
                 false);
 
         // One byte larger than the initial split max size
@@ -148,6 +154,7 @@ public class TestHiveSplitSource
                 new TestingHiveSplitLoader(),
                 Executors.newFixedThreadPool(5),
                 new CounterStat(),
+                new DefaultCachingHostAddressProvider(),
                 false);
 
         // add some splits
@@ -199,6 +206,7 @@ public class TestHiveSplitSource
                 new TestingHiveSplitLoader(),
                 Executors.newFixedThreadPool(5),
                 new CounterStat(),
+                new DefaultCachingHostAddressProvider(),
                 false);
 
         SettableFuture<ConnectorSplit> splits = SettableFuture.create();
@@ -231,7 +239,7 @@ public class TestHiveSplitSource
 
             // wait for thread to get the split
             ConnectorSplit split = splits.get(800, TimeUnit.MILLISECONDS);
-            assertEquals(((HiveSplit) split).getSchema().getProperty("id"), "33");
+            assertThat(((HiveSplit) split).getSchema().serdeProperties()).containsEntry("id", "33");
         }
         finally {
             // make sure the thread exits
@@ -254,6 +262,7 @@ public class TestHiveSplitSource
                 new TestingHiveSplitLoader(),
                 Executors.newFixedThreadPool(5),
                 new CounterStat(),
+                new DefaultCachingHostAddressProvider(),
                 false);
         int testSplitSizeInBytes = new TestSplit(0).getEstimatedSizeInBytes();
 
@@ -325,17 +334,16 @@ public class TestHiveSplitSource
                     fileSize.toBytes(),
                     fileSize.toBytes(),
                     Instant.now().toEpochMilli(),
-                    properties("id", String.valueOf(id)),
+                    new Schema("abc", false, ImmutableMap.of("id", String.valueOf(id))),
                     ImmutableList.of(),
                     ImmutableList.of(new InternalHiveBlock(0, fileSize.toBytes(), ImmutableList.of())),
                     bucketNumber,
                     bucketNumber,
                     true,
                     false,
-                    TableToPartitionMapping.empty(),
+                    ImmutableMap.of(),
                     Optional.empty(),
                     Optional.empty(),
-                    false,
                     Optional.empty(),
                     partitionMatchSupplier);
         }

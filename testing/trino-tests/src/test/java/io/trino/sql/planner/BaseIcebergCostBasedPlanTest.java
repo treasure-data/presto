@@ -17,13 +17,11 @@ package io.trino.sql.planner;
 import com.google.common.collect.ImmutableMap;
 import com.google.errorprone.annotations.concurrent.GuardedBy;
 import io.airlift.log.Logger;
-import io.trino.hdfs.DynamicHdfsConfiguration;
-import io.trino.hdfs.HdfsConfig;
-import io.trino.hdfs.HdfsConfigurationInitializer;
-import io.trino.hdfs.HdfsEnvironment;
-import io.trino.hdfs.authentication.NoHdfsAuthentication;
-import io.trino.hdfs.s3.HiveS3Config;
-import io.trino.hdfs.s3.TrinoS3ConfigurationInitializer;
+import io.airlift.units.DataSize;
+import io.opentelemetry.api.OpenTelemetry;
+import io.trino.filesystem.s3.S3FileSystemConfig;
+import io.trino.filesystem.s3.S3FileSystemFactory;
+import io.trino.filesystem.s3.S3FileSystemStats;
 import io.trino.plugin.hive.NodeVersion;
 import io.trino.plugin.hive.metastore.Database;
 import io.trino.plugin.hive.metastore.Table;
@@ -47,7 +45,6 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Verify.verify;
@@ -118,23 +115,19 @@ public abstract class BaseIcebergCostBasedPlanTest
             throw new UncheckedIOException(e);
         }
 
-        HdfsConfig hdfsConfig = new HdfsConfig();
-        HiveS3Config s3Config = new HiveS3Config()
-                .setS3Endpoint(minio.getMinioAddress())
-                .setS3AwsAccessKey(MINIO_ACCESS_KEY)
-                .setS3AwsSecretKey(MINIO_SECRET_KEY)
-                .setS3PathStyleAccess(true);
-        HdfsEnvironment hdfsEnvironment = new HdfsEnvironment(
-                new DynamicHdfsConfiguration(
-                        new HdfsConfigurationInitializer(hdfsConfig, Set.of(new TrinoS3ConfigurationInitializer(s3Config))),
-                        Set.of()),
-                hdfsConfig,
-                new NoHdfsAuthentication());
+        S3FileSystemFactory s3FileSystemFactory =
+                new S3FileSystemFactory(
+                        OpenTelemetry.noop(),
+                        new S3FileSystemConfig()
+                                .setAwsAccessKey(MINIO_ACCESS_KEY)
+                                .setAwsSecretKey(MINIO_SECRET_KEY)
+                                .setEndpoint(minio.getMinioAddress())
+                                .setStreamingPartSize(DataSize.valueOf("5.5MB")), new S3FileSystemStats());
 
         fileMetastore = new FileHiveMetastore(
                 // Must match the version picked by the LocalQueryRunner
                 new NodeVersion("<unknown>"),
-                hdfsEnvironment,
+                s3FileSystemFactory,
                 false,
                 new FileHiveMetastoreConfig()
                         .setCatalogDirectory(temporaryMetastoreDirectory.toString()));

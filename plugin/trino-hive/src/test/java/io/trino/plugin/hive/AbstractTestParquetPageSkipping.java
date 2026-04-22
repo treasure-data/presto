@@ -16,6 +16,8 @@ package io.trino.plugin.hive;
 import com.google.common.io.Resources;
 import io.trino.Session;
 import io.trino.execution.QueryStats;
+import io.trino.filesystem.Location;
+import io.trino.filesystem.TrinoFileSystem;
 import io.trino.operator.OperatorStats;
 import io.trino.spi.QueryId;
 import io.trino.spi.metrics.Count;
@@ -29,8 +31,11 @@ import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
-import java.net.URISyntaxException;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.URL;
 import java.util.Map;
+import java.util.UUID;
 
 import static com.google.common.collect.MoreCollectors.onlyElement;
 import static io.trino.parquet.reader.ParquetReader.COLUMN_INDEX_ROWS_FILTERED;
@@ -42,6 +47,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 public abstract class AbstractTestParquetPageSkipping
         extends AbstractTestQueryFramework
 {
+    protected TrinoFileSystem fileSystem;
+
     private void buildSortedTables(String tableName, String sortByColumnName, String sortByColumnType)
     {
         String createTableTemplate =
@@ -83,6 +90,7 @@ public abstract class AbstractTestParquetPageSkipping
     public void testRowGroupPruningFromPageIndexes()
             throws Exception
     {
+        Location dataFile = copyInDataFile("parquet_page_skipping/orders_sorted_by_totalprice/data.parquet");
         String tableName = "test_row_group_pruning_" + randomNameSuffix();
         File parquetFile = new File(Resources.getResource("parquet_page_skipping/orders_sorted_by_totalprice").toURI());
         assertUpdate(
@@ -101,29 +109,29 @@ public abstract class AbstractTestParquetPageSkipping
                         WITH (
                            format = 'PARQUET',
                            external_location = '%s')
-                        """.formatted(tableName, parquetFile.getAbsolutePath()));
+                        """.formatted(tableName, dataFile.parentDirectory()));
 
         int rowCount = assertColumnIndexResults("SELECT * FROM " + tableName + " WHERE totalprice BETWEEN 100000 AND 131280 AND clerk = 'Clerk#000000624'");
         assertThat(rowCount).isGreaterThan(0);
 
-        // `totalprice BETWEEN 51890 AND 51900` is chosen to lie between min/max values of row group
-        // but outside page level min/max boundaries to trigger pruning of row group using column index
+// `totalprice BETWEEN 51890 AND 51900` is chosen to lie between min/max values of row group
+// but outside page level min/max boundaries to trigger pruning of row group using column index
         assertRowGroupPruning("SELECT * FROM " + tableName + " WHERE totalprice BETWEEN 51890 AND 51900 AND orderkey > 0");
         assertUpdate("DROP TABLE " + tableName);
     }
 
     @Test
     public void testPageSkippingWithNonSequentialOffsets()
-            throws URISyntaxException
+            throws IOException
     {
+        Location dataFile = copyInDataFile("parquet_page_skipping/random/data.parquet");
         String tableName = "test_random_" + randomNameSuffix();
-        File parquetFile = new File(Resources.getResource("parquet_page_skipping/random").toURI());
         assertUpdate(format(
                 "CREATE TABLE %s (col double) WITH (format = 'PARQUET', external_location = '%s')",
                 tableName,
-                parquetFile.getAbsolutePath()));
-        // These queries select a subset of pages which are stored at non-sequential offsets
-        // This reproduces the issue identified in https://github.com/trinodb/trino/issues/9097
+                dataFile.parentDirectory()));
+// These queries select a subset of pages which are stored at non-sequential offsets
+// This reproduces the issue identified in https://github.com/trinodb/trino/issues/9097
         for (double i = 0; i < 1; i += 0.1) {
             assertColumnIndexResults(format("SELECT * FROM %s WHERE col BETWEEN %f AND %f", tableName, i - 0.00001, i + 0.00001));
         }
@@ -132,17 +140,18 @@ public abstract class AbstractTestParquetPageSkipping
 
     @Test
     public void testFilteringOnColumnNameWithDot()
-            throws URISyntaxException
+            throws IOException
     {
+        Location dataFile = copyInDataFile("parquet_page_skipping/column_name_with_dot/data.parquet");
+
         String nameInSql = "\"a.dot\"";
         String tableName = "test_column_name_with_dot_" + randomNameSuffix();
 
-        File parquetFile = new File(Resources.getResource("parquet_page_skipping/column_name_with_dot").toURI());
         assertUpdate(format(
                 "CREATE TABLE %s (key varchar(50), %s varchar(50)) WITH (format = 'PARQUET', external_location = '%s')",
                 tableName,
                 nameInSql,
-                parquetFile.getAbsolutePath()));
+                dataFile.parentDirectory()));
 
         assertQuery("SELECT key FROM " + tableName + " WHERE " + nameInSql + " IS NULL", "VALUES ('null value')");
         assertQuery("SELECT key FROM " + tableName + " WHERE " + nameInSql + " = 'abc'", "VALUES ('sample value')");
@@ -164,14 +173,14 @@ public abstract class AbstractTestParquetPageSkipping
             assertThat(assertColumnIndexResults(format("SELECT %s FROM %s WHERE %s < %s", sortByColumn, tableName, sortByColumn, lowValue))).isGreaterThan(0);
             assertThat(assertColumnIndexResults(format("SELECT %s FROM %s WHERE %s > %s", sortByColumn, tableName, sortByColumn, highValue))).isGreaterThan(0);
             assertThat(assertColumnIndexResults(format("SELECT %s FROM %s WHERE %s BETWEEN %s AND %s", sortByColumn, tableName, sortByColumn, middleLowValue, middleHighValue))).isGreaterThan(0);
-            // Tests synchronization of reading values across columns
+// Tests synchronization of reading values across columns
             assertColumnIndexResults(format("SELECT * FROM %s WHERE %s = %s", tableName, sortByColumn, middleLowValue));
             assertThat(assertColumnIndexResults(format("SELECT * FROM %s WHERE %s < %s", tableName, sortByColumn, lowValue))).isGreaterThan(0);
             assertThat(assertColumnIndexResults(format("SELECT * FROM %s WHERE %s > %s", tableName, sortByColumn, highValue))).isGreaterThan(0);
             assertThat(assertColumnIndexResults(format("SELECT * FROM %s WHERE %s BETWEEN %s AND %s", tableName, sortByColumn, middleLowValue, middleHighValue))).isGreaterThan(0);
-            // Nested data
+// Nested data
             assertColumnIndexResults(format("SELECT rvalues FROM %s WHERE %s IN (%s, %s, %s, %s)", tableName, sortByColumn, lowValue, middleLowValue, middleHighValue, highValue));
-            // Without nested data
+// Without nested data
             assertColumnIndexResults(format("SELECT orderkey, orderdate FROM %s WHERE %s IN (%s, %s, %s, %s)", tableName, sortByColumn, lowValue, middleLowValue, middleHighValue, highValue));
         }
         assertUpdate("DROP TABLE " + tableName);
@@ -179,15 +188,15 @@ public abstract class AbstractTestParquetPageSkipping
 
     @Test
     public void testFilteringWithColumnIndex()
-            throws URISyntaxException
+            throws IOException
     {
+        Location dataFile = copyInDataFile("parquet_page_skipping/lineitem_sorted_by_suppkey/data.parquet");
         String tableName = "test_page_filtering_" + randomNameSuffix();
-        File parquetFile = new File(Resources.getResource("parquet_page_skipping/lineitem_sorted_by_suppkey").toURI());
         assertUpdate(format(
                 "CREATE TABLE %s (suppkey bigint, extendedprice decimal(12, 2), shipmode varchar(10), comment varchar(44)) " +
                         "WITH (format = 'PARQUET', external_location = '%s')",
                 tableName,
-                parquetFile.getAbsolutePath()));
+                dataFile.parentDirectory()));
 
         verifyFilteringWithColumnIndex("SELECT * FROM " + tableName + " WHERE suppkey = 10");
         verifyFilteringWithColumnIndex("SELECT * FROM " + tableName + " WHERE suppkey BETWEEN 25 AND 35");
@@ -302,5 +311,19 @@ public abstract class AbstractTestParquetPageSkipping
                 .stream()
                 .filter(summary -> summary.getOperatorType().startsWith("TableScan") || summary.getOperatorType().startsWith("Scan"))
                 .collect(onlyElement());
+    }
+
+    private Location copyInDataFile(String resourceFileName)
+            throws IOException
+    {
+        URL resourceLocation = Resources.getResource(resourceFileName);
+
+        Location tempDir = Location.of("local:///temp_" + UUID.randomUUID());
+        fileSystem.createDirectory(tempDir);
+        Location dataFile = tempDir.appendPath("data.parquet");
+        try (OutputStream out = fileSystem.newOutputFile(dataFile).create()) {
+            Resources.copy(resourceLocation, out);
+        }
+        return dataFile;
     }
 }

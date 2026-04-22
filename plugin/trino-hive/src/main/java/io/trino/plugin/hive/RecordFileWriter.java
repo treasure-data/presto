@@ -39,6 +39,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 
@@ -81,7 +82,7 @@ public class RecordFileWriter
             Path path,
             List<String> inputColumnNames,
             StorageFormat storageFormat,
-            Properties schema,
+            Map<String, String> schema,
             DataSize estimatedWriterMemoryUsage,
             JobConf conf,
             TypeManager typeManager,
@@ -100,17 +101,19 @@ public class RecordFileWriter
         fieldCount = fileColumnNames.size();
 
         String serde = storageFormat.getSerde();
-        serializer = initializeSerializer(conf, schema, serde);
+        Properties properties = new Properties();
+        properties.putAll(schema);
+        serializer = initializeSerializer(conf, properties, serde);
 
         List<ObjectInspector> objectInspectors = getRowColumnInspectors(fileColumnTypes);
         tableInspector = getStandardStructObjectInspector(fileColumnNames, objectInspectors);
 
         if (storageFormat.getOutputFormat().equals(HIVE_IGNORE_KEY_OUTPUT_FORMAT_CLASS)) {
             Optional<TextHeaderWriter> textHeaderWriter = Optional.of(new TextHeaderWriter(serializer, typeManager, session, fileColumnNames));
-            recordWriter = createRecordWriter(path, conf, schema, storageFormat.getOutputFormat(), session, textHeaderWriter);
+            recordWriter = createRecordWriter(path, conf, properties, storageFormat.getOutputFormat(), session, textHeaderWriter);
         }
         else {
-            recordWriter = createRecordWriter(path, conf, schema, storageFormat.getOutputFormat(), session, Optional.empty());
+            recordWriter = createRecordWriter(path, conf, properties, storageFormat.getOutputFormat(), session, Optional.empty());
         }
 
         // reorder (and possibly reduce) struct fields to match input

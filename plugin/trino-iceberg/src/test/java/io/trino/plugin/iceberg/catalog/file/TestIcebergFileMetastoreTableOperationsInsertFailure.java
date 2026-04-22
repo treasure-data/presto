@@ -15,6 +15,7 @@ package io.trino.plugin.iceberg.catalog.file;
 
 import com.google.common.collect.ImmutableMap;
 import io.trino.Session;
+import io.trino.filesystem.local.LocalFileSystemFactory;
 import io.trino.metadata.InternalFunctionBundle;
 import io.trino.plugin.hive.NodeVersion;
 import io.trino.plugin.hive.metastore.Database;
@@ -35,12 +36,11 @@ import org.testng.annotations.Test;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
-import static com.google.inject.util.Modules.EMPTY_MODULE;
-import static io.trino.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static java.lang.String.format;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -66,16 +66,15 @@ public class TestIcebergFileMetastoreTableOperationsInsertFailure
 
         HiveMetastore metastore = new FileHiveMetastore(
                 new NodeVersion("testversion"),
-                HDFS_ENVIRONMENT,
+                new LocalFileSystemFactory(baseDir.toPath()),
                 new HiveMetastoreConfig().isHideDeltaLakeTables(),
                 new FileHiveMetastoreConfig()
-                        .setCatalogDirectory(baseDir.toURI().toString())
-                        .setMetastoreUser("test"))
+                        .setCatalogDirectory("local://"))
         {
             @Override
-            public synchronized void replaceTable(String databaseName, String tableName, Table newTable, PrincipalPrivileges principalPrivileges)
+            public synchronized void replaceTable(String databaseName, String tableName, Table newTable, PrincipalPrivileges principalPrivileges, Map<String, String> environmentContext)
             {
-                super.replaceTable(databaseName, tableName, newTable, principalPrivileges);
+                super.replaceTable(databaseName, tableName, newTable, principalPrivileges, environmentContext);
                 throw new RuntimeException("Test-simulated metastore timeout exception");
             }
         };
@@ -87,7 +86,7 @@ public class TestIcebergFileMetastoreTableOperationsInsertFailure
 
         queryRunner.createCatalog(
                 ICEBERG_CATALOG,
-                new TestingIcebergConnectorFactory(Optional.of(new TestingIcebergFileMetastoreCatalogModule(metastore)), Optional.empty(), EMPTY_MODULE),
+                new TestingIcebergConnectorFactory(baseDir.toPath(), Optional.of(new TestingIcebergFileMetastoreCatalogModule(metastore))),
                 ImmutableMap.of());
 
         Database database = Database.builder()

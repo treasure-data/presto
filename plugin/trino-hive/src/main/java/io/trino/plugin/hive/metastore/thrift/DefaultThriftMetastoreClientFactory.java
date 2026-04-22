@@ -34,6 +34,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.security.cert.Certificate;
@@ -54,31 +55,34 @@ public class DefaultThriftMetastoreClientFactory
 {
     private final Optional<SSLContext> sslContext;
     private final Optional<HostAndPort> socksProxy;
-    private final int timeoutMillis;
+    private final int connectTimeoutMillis;
+    private final int readTimeoutMillis;
     private final HiveMetastoreAuthentication metastoreAuthentication;
     private final String hostname;
+    private final Optional<String> catalogName;
 
     private final MetastoreSupportsDateStatistics metastoreSupportsDateStatistics = new MetastoreSupportsDateStatistics();
     private final AtomicInteger chosenGetTableAlternative = new AtomicInteger(Integer.MAX_VALUE);
     private final AtomicInteger chosenTableParamAlternative = new AtomicInteger(Integer.MAX_VALUE);
-    private final AtomicInteger chosenGetAllViewsPerDatabaseAlternative = new AtomicInteger(Integer.MAX_VALUE);
     private final AtomicInteger chosenAlterTransactionalTableAlternative = new AtomicInteger(Integer.MAX_VALUE);
     private final AtomicInteger chosenAlterPartitionsAlternative = new AtomicInteger(Integer.MAX_VALUE);
-    private final AtomicInteger chosenGetAllTablesAlternative = new AtomicInteger(Integer.MAX_VALUE);
-    private final AtomicInteger chosenGetAllViewsAlternative = new AtomicInteger(Integer.MAX_VALUE);
 
     public DefaultThriftMetastoreClientFactory(
             Optional<SSLContext> sslContext,
             Optional<HostAndPort> socksProxy,
-            Duration timeout,
+            Duration connectTimeout,
+            Duration readTimeout,
             HiveMetastoreAuthentication metastoreAuthentication,
-            String hostname)
+            String hostname,
+            Optional<String> catalogName)
     {
         this.sslContext = requireNonNull(sslContext, "sslContext is null");
         this.socksProxy = requireNonNull(socksProxy, "socksProxy is null");
-        this.timeoutMillis = toIntExact(timeout.toMillis());
+        this.connectTimeoutMillis = toIntExact(connectTimeout.toMillis());
+        this.readTimeoutMillis = toIntExact(readTimeout.toMillis());
         this.metastoreAuthentication = requireNonNull(metastoreAuthentication, "metastoreAuthentication is null");
         this.hostname = requireNonNull(hostname, "hostname is null");
+        this.catalogName = requireNonNull(catalogName, "catalogName is null");
     }
 
     @Inject
@@ -92,16 +96,18 @@ public class DefaultThriftMetastoreClientFactory
                         config.isTlsEnabled(),
                         Optional.ofNullable(config.getKeystorePath()),
                         Optional.ofNullable(config.getKeystorePassword()),
-                        config.getTruststorePath(),
+                        Optional.ofNullable(config.getTruststorePath()),
                         Optional.ofNullable(config.getTruststorePassword())),
                 Optional.ofNullable(config.getSocksProxy()),
-                config.getMetastoreTimeout(),
+                config.getConnectTimeout(),
+                config.getReadTimeout(),
                 metastoreAuthentication,
-                nodeManager.getCurrentNode().getHost());
+                nodeManager.getCurrentNode().getHost(),
+                config.getCatalogName());
     }
 
     @Override
-    public ThriftMetastoreClient create(HostAndPort address, Optional<String> delegationToken)
+    public ThriftMetastoreClient create(URI address, Optional<String> delegationToken)
             throws TTransportException
     {
         return create(() -> createTransport(address, delegationToken), hostname);
@@ -113,27 +119,26 @@ public class DefaultThriftMetastoreClientFactory
         return new ThriftHiveMetastoreClient(
                 transportSupplier,
                 hostname,
+                catalogName,
                 metastoreSupportsDateStatistics,
+                true,
                 chosenGetTableAlternative,
                 chosenTableParamAlternative,
-                chosenGetAllTablesAlternative,
-                chosenGetAllViewsPerDatabaseAlternative,
-                chosenGetAllViewsAlternative,
                 chosenAlterTransactionalTableAlternative,
                 chosenAlterPartitionsAlternative);
     }
 
-    private TTransport createTransport(HostAndPort address, Optional<String> delegationToken)
+    private TTransport createTransport(URI uri, Optional<String> delegationToken)
             throws TTransportException
     {
-        return Transport.create(address, sslContext, socksProxy, timeoutMillis, metastoreAuthentication, delegationToken);
+        return Transport.create(HostAndPort.fromParts(uri.getHost(), uri.getPort()), sslContext, socksProxy, connectTimeoutMillis, readTimeoutMillis, metastoreAuthentication, delegationToken);
     }
 
     private static Optional<SSLContext> buildSslContext(
             boolean tlsEnabled,
             Optional<File> keyStorePath,
             Optional<String> keyStorePassword,
-            File trustStorePath,
+            Optional<File> trustStorePath,
             Optional<String> trustStorePassword)
     {
         if (!tlsEnabled) {
@@ -163,7 +168,7 @@ public class DefaultThriftMetastoreClientFactory
             }
 
             // load TrustStore
-            KeyStore trustStore = loadTrustStore(trustStorePath, trustStorePassword);
+            KeyStore trustStore = loadTrustStore(trustStorePath.get(), trustStorePassword);
 
             // create TrustManagerFactory
             TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());

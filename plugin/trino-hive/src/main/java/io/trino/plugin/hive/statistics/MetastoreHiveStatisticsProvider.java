@@ -86,6 +86,8 @@ import static io.trino.spi.type.SmallintType.SMALLINT;
 import static io.trino.spi.type.TinyintType.TINYINT;
 import static java.lang.Double.isFinite;
 import static java.lang.Double.isNaN;
+import static java.lang.Math.max;
+import static java.lang.Math.min;
 import static java.lang.String.format;
 import static java.util.Collections.unmodifiableList;
 import static java.util.Objects.requireNonNull;
@@ -238,8 +240,8 @@ public class MetastoreHiveStatisticsProvider
     {
         columnStatistics.getMaxValueSizeInBytes().ifPresent(maxValueSizeInBytes ->
                 checkStatistics(maxValueSizeInBytes >= 0, table, partition, column, "maxValueSizeInBytes must be greater than or equal to zero: %s", maxValueSizeInBytes));
-        columnStatistics.getTotalSizeInBytes().ifPresent(totalSizeInBytes ->
-                checkStatistics(totalSizeInBytes >= 0, table, partition, column, "totalSizeInBytes must be greater than or equal to zero: %s", totalSizeInBytes));
+        columnStatistics.getAverageColumnLength().ifPresent(averageColumnLength ->
+                checkStatistics(averageColumnLength >= 0, table, partition, column, "averageColumnLength must be greater than or equal to zero: %s", averageColumnLength));
         columnStatistics.getNullsCount().ifPresent(nullsCount -> {
             checkStatistics(nullsCount >= 0, table, partition, column, "nullsCount must be greater than or equal to zero: %s", nullsCount);
             if (rowCount.isPresent()) {
@@ -253,29 +255,8 @@ public class MetastoreHiveStatisticsProvider
                         rowCount.getAsLong());
             }
         });
-        columnStatistics.getDistinctValuesCount().ifPresent(distinctValuesCount -> {
+        columnStatistics.getDistinctValuesWithNullCount().ifPresent(distinctValuesCount -> {
             checkStatistics(distinctValuesCount >= 0, table, partition, column, "distinctValuesCount must be greater than or equal to zero: %s", distinctValuesCount);
-            if (rowCount.isPresent()) {
-                checkStatistics(
-                        distinctValuesCount <= rowCount.getAsLong(),
-                        table,
-                        partition,
-                        column,
-                        "distinctValuesCount must be less than or equal to rowCount. distinctValuesCount: %s. rowCount: %s.",
-                        distinctValuesCount,
-                        rowCount.getAsLong());
-            }
-            if (rowCount.isPresent() && columnStatistics.getNullsCount().isPresent()) {
-                long nonNullsCount = rowCount.getAsLong() - columnStatistics.getNullsCount().getAsLong();
-                checkStatistics(
-                        distinctValuesCount <= nonNullsCount,
-                        table,
-                        partition,
-                        column,
-                        "distinctValuesCount must be less than or equal to nonNullsCount. distinctValuesCount: %s. nonNullsCount: %s.",
-                        distinctValuesCount,
-                        nonNullsCount);
-            }
         });
 
         columnStatistics.getIntegerStatistics().ifPresent(integerStatistics -> {
@@ -715,7 +696,7 @@ public class MetastoreHiveStatisticsProvider
         }
 
         return ColumnStatistics.builder()
-                .setDistinctValuesCount(calculateDistinctValuesCount(columnStatistics))
+                .setDistinctValuesCount(calculateDistinctValuesCount(column, partitionStatistics))
                 .setNullsFraction(calculateNullsFraction(column, partitionStatistics))
                 .setDataSize(calculateDataSize(column, partitionStatistics, rowsCount))
                 .setRange(calculateRange(type, columnStatistics))
@@ -723,10 +704,10 @@ public class MetastoreHiveStatisticsProvider
     }
 
     @VisibleForTesting
-    static Estimate calculateDistinctValuesCount(List<HiveColumnStatistics> columnStatistics)
+    static Estimate calculateDistinctValuesCount(String column, Collection<PartitionStatistics> partitionStatistics)
     {
-        return columnStatistics.stream()
-                .map(MetastoreHiveStatisticsProvider::getDistinctValuesCount)
+        return partitionStatistics.stream()
+                .map(statistics -> getDistinctValuesCount(column, statistics))
                 .filter(OptionalLong::isPresent)
                 .map(OptionalLong::getAsLong)
                 .peek(distinctValuesCount -> verify(distinctValuesCount >= 0, "distinctValuesCount must be greater than or equal to zero"))
@@ -735,8 +716,13 @@ public class MetastoreHiveStatisticsProvider
                 .orElse(Estimate.unknown());
     }
 
-    private static OptionalLong getDistinctValuesCount(HiveColumnStatistics statistics)
+    static OptionalLong getDistinctValuesCount(String column, PartitionStatistics partitionStatistics)
     {
+        HiveColumnStatistics statistics = partitionStatistics.getColumnStatistics().get(column);
+        if (statistics == null) {
+            return OptionalLong.empty();
+        }
+
         if (statistics.getBooleanStatistics().isPresent() &&
                 statistics.getBooleanStatistics().get().getFalseCount().isPresent() &&
                 statistics.getBooleanStatistics().get().getTrueCount().isPresent()) {
@@ -744,10 +730,27 @@ public class MetastoreHiveStatisticsProvider
             long trueCount = statistics.getBooleanStatistics().get().getTrueCount().getAsLong();
             return OptionalLong.of((falseCount > 0 ? 1 : 0) + (trueCount > 0 ? 1 : 0));
         }
-        if (statistics.getDistinctValuesCount().isPresent()) {
-            return statistics.getDistinctValuesCount();
+
+        if (statistics.getDistinctValuesWithNullCount().isEmpty()) {
+            return OptionalLong.empty();
         }
-        return OptionalLong.empty();
+
+        long distinctValuesCount = statistics.getDistinctValuesWithNullCount().getAsLong();
+
+        // Hive includes nulls in the distinct values count, but Trino does not
+        long nullsCount = statistics.getNullsCount().orElse(0);
+        if (distinctValuesCount > 0 && nullsCount > 0) {
+            distinctValuesCount--;
+        }
+
+        // if there is non-null row the distinct values count should be at least 1
+        if (distinctValuesCount == 0 && nullsCount < partitionStatistics.getBasicStatistics().getRowCount().orElse(0)) {
+            distinctValuesCount = 1;
+        }
+
+        // Hive can produce distinct values that are much larger than the actual number of rows in the partition
+        distinctValuesCount = min(distinctValuesCount, partitionStatistics.getBasicStatistics().getRowCount().orElse(Long.MAX_VALUE) - nullsCount);
+        return OptionalLong.of(distinctValuesCount);
     }
 
     @VisibleForTesting
@@ -808,7 +811,7 @@ public class MetastoreHiveStatisticsProvider
                     if (columnStatistics == null) {
                         return false;
                     }
-                    return columnStatistics.getTotalSizeInBytes().isPresent();
+                    return columnStatistics.getAverageColumnLength().isPresent();
                 })
                 .collect(toImmutableList());
 
@@ -817,16 +820,21 @@ public class MetastoreHiveStatisticsProvider
         }
 
         long knownRowCount = 0;
-        long knownDataSize = 0;
+        double knownDataSize = 0;
         for (PartitionStatistics statistics : statisticsWithKnownRowCountAndDataSize) {
             long rowCount = statistics.getBasicStatistics().getRowCount().orElseThrow(() -> new VerifyException("rowCount is not present"));
             verify(rowCount >= 0, "rowCount must be greater than or equal to zero");
             HiveColumnStatistics columnStatistics = statistics.getColumnStatistics().get(column);
             verifyNotNull(columnStatistics, "columnStatistics is null");
-            long dataSize = columnStatistics.getTotalSizeInBytes().orElseThrow(() -> new VerifyException("totalSizeInBytes is not present"));
-            verify(dataSize >= 0, "dataSize must be greater than or equal to zero");
+
+            long nullCount = columnStatistics.getNullsCount().orElse(0);
+            verify(nullCount >= 0, "nullCount must be greater than or equal to zero");
+            long nonNullRowCount = max(rowCount - nullCount, 0);
+
+            double averageColumnLength = columnStatistics.getAverageColumnLength().orElseThrow(() -> new VerifyException("averageColumnLength is not present"));
+            verify(averageColumnLength >= 0, "averageColumnLength must be greater than or equal to zero");
             knownRowCount += rowCount;
-            knownDataSize += dataSize;
+            knownDataSize += averageColumnLength * nonNullRowCount;
         }
 
         if (totalRowCount == 0) {
@@ -837,7 +845,7 @@ public class MetastoreHiveStatisticsProvider
             return Estimate.unknown();
         }
 
-        double averageValueDataSizeInBytes = ((double) knownDataSize) / knownRowCount;
+        double averageValueDataSizeInBytes = knownDataSize / knownRowCount;
         return Estimate.of(averageValueDataSizeInBytes * totalRowCount);
     }
 

@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import io.trino.hive.thrift.metastore.ColumnStatisticsData;
 import io.trino.hive.thrift.metastore.ColumnStatisticsObj;
+import io.trino.hive.thrift.metastore.DataOperationType;
 import io.trino.hive.thrift.metastore.Database;
 import io.trino.hive.thrift.metastore.EnvironmentContext;
 import io.trino.hive.thrift.metastore.FieldSchema;
@@ -36,7 +37,7 @@ import io.trino.hive.thrift.metastore.RolePrincipalGrant;
 import io.trino.hive.thrift.metastore.SerDeInfo;
 import io.trino.hive.thrift.metastore.StorageDescriptor;
 import io.trino.hive.thrift.metastore.Table;
-import io.trino.plugin.hive.acid.AcidOperation;
+import io.trino.hive.thrift.metastore.TableMeta;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.testng.services.ManageTestResources;
 import org.apache.hadoop.hive.metastore.TableType;
@@ -48,11 +49,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.trino.hive.thrift.metastore.PrincipalType.ROLE;
 import static io.trino.hive.thrift.metastore.PrincipalType.USER;
+import static io.trino.plugin.hive.TableType.MANAGED_TABLE;
 
 @ManageTestResources.Suppress(because = "close() is no-op and instance's resources are negligible")
 public class MockThriftMetastoreClient
@@ -157,7 +160,6 @@ public class MockThriftMetastoreClient
         return ImmutableList.of(TEST_DATABASE);
     }
 
-    @Override
     public List<String> getAllTables(String dbName)
     {
         accessCount.incrementAndGet();
@@ -170,7 +172,6 @@ public class MockThriftMetastoreClient
         return ImmutableList.of(TEST_TABLE);
     }
 
-    @Override
     public Optional<List<SchemaTableName>> getAllTables()
             throws TException
     {
@@ -181,19 +182,16 @@ public class MockThriftMetastoreClient
         return Optional.of(ImmutableList.of(new SchemaTableName(TEST_DATABASE, TEST_TABLE)));
     }
 
-    @Override
     public List<String> getAllViews(String databaseName)
     {
         throw new UnsupportedOperationException();
     }
 
-    @Override
     public Optional<List<SchemaTableName>> getAllViews()
     {
         throw new UnsupportedOperationException();
     }
 
-    @Override
     public List<String> getTablesWithParameter(String databaseName, String parameterKey, String parameterValue)
     {
         throw new UnsupportedOperationException();
@@ -211,6 +209,25 @@ public class MockThriftMetastoreClient
             throw new NoSuchObjectException();
         }
         return new Database(TEST_DATABASE, null, null, null);
+    }
+
+    @Override
+    public List<TableMeta> getTableMeta(String databaseName)
+    {
+        accessCount.incrementAndGet();
+        if (throwException) {
+            throw new RuntimeException();
+        }
+        if (!databaseName.equals(TEST_DATABASE)) {
+            return ImmutableList.of(); // As specified by Hive specification
+        }
+        return ImmutableList.of(new TableMeta(TEST_DATABASE, TEST_TABLE, MANAGED_TABLE.name()));
+    }
+
+    @Override
+    public List<String> getTableNamesWithParameters(String databaseName, String parameterKey, Set<String> parameterValues)
+    {
+        throw new UnsupportedOperationException();
     }
 
     @Override
@@ -502,7 +519,6 @@ public class MockThriftMetastoreClient
         // No-op
     }
 
-    @Override
     public List<RolePrincipalGrant> listGrantedPrincipals(String role)
     {
         throw new UnsupportedOperationException();
@@ -585,7 +601,8 @@ public class MockThriftMetastoreClient
     }
 
     @Override
-    public void addDynamicPartitions(String dbName, String tableName, List<String> partitionNames, long transactionId, long writeId, AcidOperation operation)
+    public void addDynamicPartitions(String dbName, String tableName, List<String> partitionNames, long transactionId, long writeId, DataOperationType operation)
+            throws TException
     {
         throw new UnsupportedOperationException();
     }

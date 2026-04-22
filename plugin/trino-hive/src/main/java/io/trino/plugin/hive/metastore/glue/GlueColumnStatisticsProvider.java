@@ -33,7 +33,15 @@ public interface GlueColumnStatisticsProvider
 
     Map<String, HiveColumnStatistics> getTableColumnStatistics(Table table);
 
+    Map<String, HiveColumnStatistics> getTableColumnStatistics(String databaseName, String tableName, Set<String> columnNames);
+
     Map<Partition, Map<String, HiveColumnStatistics>> getPartitionColumnStatistics(Collection<Partition> partitions);
+
+    Map<String, Map<String, HiveColumnStatistics>> getPartitionColumnStatistics(
+            String databaseName,
+            String tableName,
+            Set<String> partitionNames,
+            Set<String> columns);
 
     default Map<String, HiveColumnStatistics> getPartitionColumnStatistics(Partition partition)
     {

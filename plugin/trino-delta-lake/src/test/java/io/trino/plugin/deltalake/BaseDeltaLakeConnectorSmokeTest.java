@@ -154,7 +154,7 @@ public abstract class BaseDeltaLakeConnectorSmokeTest
         this.metastore = new BridgingHiveMetastore(
                 testingThriftHiveMetastoreBuilder()
                         .metastoreClient(hiveMinioDataLake.getHiveHadoop().getHiveMetastoreEndpoint())
-                        .build());
+                        .build(this::closeAfterClass));
 
         DistributedQueryRunner queryRunner = createDeltaLakeQueryRunner();
         try {
@@ -188,7 +188,7 @@ public abstract class BaseDeltaLakeConnectorSmokeTest
                 registerTableFromResources(table, resourcePath, queryRunner);
             });
 
-            queryRunner.installPlugin(new TestingHivePlugin());
+            queryRunner.installPlugin(new TestingHivePlugin(queryRunner.getCoordinator().getBaseDataDir().resolve("hive_data")));
 
             queryRunner.createCatalog(
                     "hive",

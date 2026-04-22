@@ -14,6 +14,7 @@
 package io.trino.plugin.iceberg.catalog.file;
 
 import io.trino.Session;
+import io.trino.filesystem.local.LocalFileSystemFactory;
 import io.trino.plugin.hive.NodeVersion;
 import io.trino.plugin.hive.metastore.HiveMetastore;
 import io.trino.plugin.hive.metastore.HiveMetastoreConfig;
@@ -35,8 +36,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
-import static com.google.inject.util.Modules.EMPTY_MODULE;
-import static io.trino.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
 import static io.trino.testing.TestingNames.randomNameSuffix;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -61,10 +60,10 @@ public class TestIcebergFileMetastoreCreateTableFailure
         // Using FileHiveMetastore as approximation of HMS
         this.metastore = new FileHiveMetastore(
                 new NodeVersion("testversion"),
-                HDFS_ENVIRONMENT,
+                new LocalFileSystemFactory(Path.of(dataDirectory.toString())),
                 new HiveMetastoreConfig().isHideDeltaLakeTables(),
                 new FileHiveMetastoreConfig()
-                        .setCatalogDirectory(dataDirectory.toString()))
+                        .setCatalogDirectory("local://"))
         {
             @Override
             public synchronized void createTable(Table table, PrincipalPrivileges principalPrivileges)
@@ -79,7 +78,7 @@ public class TestIcebergFileMetastoreCreateTableFailure
                 .build();
 
         DistributedQueryRunner queryRunner = DistributedQueryRunner.builder(session).build();
-        queryRunner.installPlugin(new TestingIcebergPlugin(Optional.of(new TestingIcebergFileMetastoreCatalogModule(metastore)), Optional.empty(), EMPTY_MODULE));
+        queryRunner.installPlugin(new TestingIcebergPlugin(dataDirectory, Optional.of(new TestingIcebergFileMetastoreCatalogModule(metastore))));
         queryRunner.createCatalog(ICEBERG_CATALOG, "iceberg");
         queryRunner.execute("CREATE SCHEMA " + SCHEMA_NAME);
 

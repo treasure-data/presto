@@ -82,7 +82,7 @@ public class TestSpatialJoins
                         .setOwnerName(Optional.of("public"))
                         .setOwnerType(Optional.of(PrincipalType.ROLE))
                         .build());
-        queryRunner.installPlugin(new TestingHivePlugin(metastore));
+        queryRunner.installPlugin(new TestingHivePlugin(queryRunner.getCoordinator().getBaseDataDir().resolve("hive_data")));
 
         queryRunner.createCatalog("hive", "hive");
         return queryRunner;

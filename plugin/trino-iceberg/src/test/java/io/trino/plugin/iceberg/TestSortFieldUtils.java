@@ -51,14 +51,14 @@ public class TestSortFieldUtils
         // uppercase
         assertParse("ORDER_KEY ASC NULLS LAST", sortOrder(builder -> builder.asc("order_key", NullOrder.NULLS_LAST)));
         assertParse("ORDER_KEY DESC NULLS FIRST", sortOrder(builder -> builder.desc("order_key", NullOrder.NULLS_FIRST)));
-        assertDoesNotParse("\"ORDER_KEY\" ASC NULLS LAST", "Uppercase characters in identifier '\"ORDER_KEY\"' are not supported.");
-        assertDoesNotParse("\"ORDER_KEY\" DESC NULLS FIRST", "Uppercase characters in identifier '\"ORDER_KEY\"' are not supported.");
+        assertDoesNotParse("\"ORDER_KEY\" ASC NULLS LAST", "Cannot find field 'ORDER_KEY' .*");
+        assertDoesNotParse("\"ORDER_KEY\" DESC NULLS FIRST", "Cannot find field 'ORDER_KEY' .*");
 
         // mixed case
         assertParse("OrDER_keY Asc NullS LAst", sortOrder(builder -> builder.asc("order_key", NullOrder.NULLS_LAST)));
         assertParse("OrDER_keY Desc NullS FIrsT", sortOrder(builder -> builder.desc("order_key", NullOrder.NULLS_FIRST)));
-        assertDoesNotParse("\"OrDER_keY\" Asc NullS LAst", "Uppercase characters in identifier '\"OrDER_keY\"' are not supported.");
-        assertDoesNotParse("\"OrDER_keY\" Desc NullS FIrsT", "Uppercase characters in identifier '\"OrDER_keY\"' are not supported.");
+        assertDoesNotParse("\"OrDER_keY\" Asc NullS LAst", "Cannot find field 'OrDER_keY' .*");
+        assertDoesNotParse("\"OrDER_keY\" Desc NullS FIrsT", "Cannot find field 'OrDER_keY' .*");
 
         assertParse("comment", sortOrder(builder -> builder.asc("comment")));
         assertParse("\"comment\"", sortOrder(builder -> builder.asc("comment")));
@@ -106,13 +106,13 @@ public class TestSortFieldUtils
 
     private static void assertDoesNotParse(@Language("SQL") String value)
     {
-        assertDoesNotParse(value, "Unable to parse sort field: [%s]".formatted(value));
+        assertDoesNotParse(value, "\\QUnable to parse sort field: [%s]".formatted(value));
     }
 
     private static void assertDoesNotParse(@Language("SQL") String value, String expectedMessage)
     {
         assertThatThrownBy(() -> parseField(value))
-                .hasMessage(expectedMessage);
+                .hasMessageMatching(expectedMessage);
     }
 
     private static SortOrder parseField(String value)

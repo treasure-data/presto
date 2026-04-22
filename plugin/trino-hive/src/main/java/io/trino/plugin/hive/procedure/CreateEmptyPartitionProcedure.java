@@ -21,7 +21,6 @@ import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.trino.plugin.hive.HiveColumnHandle;
 import io.trino.plugin.hive.HiveInsertTableHandle;
-import io.trino.plugin.hive.HiveMetastoreClosure;
 import io.trino.plugin.hive.HiveTableHandle;
 import io.trino.plugin.hive.LocationService;
 import io.trino.plugin.hive.LocationService.WriteInfo;
@@ -29,6 +28,7 @@ import io.trino.plugin.hive.PartitionUpdate;
 import io.trino.plugin.hive.PartitionUpdate.UpdateMode;
 import io.trino.plugin.hive.TransactionalMetadata;
 import io.trino.plugin.hive.TransactionalMetadataFactory;
+import io.trino.plugin.hive.metastore.HiveMetastore;
 import io.trino.spi.TrinoException;
 import io.trino.spi.classloader.ThreadContextClassLoader;
 import io.trino.spi.connector.ConnectorAccessControl;
@@ -124,8 +124,8 @@ public class CreateEmptyPartitionProcedure
             throw new TrinoException(INVALID_PROCEDURE_ARGUMENT, "Provided partition column names do not match actual partition column names: " + actualPartitionColumnNames);
         }
 
-        HiveMetastoreClosure metastore = hiveMetadata.getMetastore().unsafeGetRawHiveMetastoreClosure();
-        if (metastore.getPartition(schemaName, tableName, partitionValues).isPresent()) {
+        HiveMetastore metastore = hiveMetadata.getMetastore().unsafeGetRawHiveMetastore();
+        if (metastore.getTable(schemaName, tableName).flatMap(table -> metastore.getPartition(table, partitionValues)).isPresent()) {
             throw new TrinoException(ALREADY_EXISTS, "Partition already exists");
         }
         HiveInsertTableHandle hiveInsertTableHandle = (HiveInsertTableHandle) hiveMetadata.beginInsert(session, tableHandle, ImmutableList.of(), NO_RETRIES);

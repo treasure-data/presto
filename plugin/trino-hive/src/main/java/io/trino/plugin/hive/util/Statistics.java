@@ -121,9 +121,9 @@ public final class Statistics
                 mergeDateStatistics(first.getDateStatistics(), second.getDateStatistics()),
                 mergeBooleanStatistics(first.getBooleanStatistics(), second.getBooleanStatistics()),
                 reduce(first.getMaxValueSizeInBytes(), second.getMaxValueSizeInBytes(), MAX, true),
-                reduce(first.getTotalSizeInBytes(), second.getTotalSizeInBytes(), ADD, true),
+                reduce(first.getAverageColumnLength(), second.getAverageColumnLength(), ADD, true),
                 reduce(first.getNullsCount(), second.getNullsCount(), ADD, false),
-                reduce(first.getDistinctValuesCount(), second.getDistinctValuesCount(), MAX, false));
+                reduce(first.getDistinctValuesWithNullCount(), second.getDistinctValuesWithNullCount(), MAX, false));
     }
 
     private static Optional<IntegerStatistics> mergeIntegerStatistics(Optional<IntegerStatistics> first, Optional<IntegerStatistics> second)
@@ -279,10 +279,10 @@ public final class Statistics
                 result.setMaxValueSizeInBytes(0);
                 return;
             case TOTAL_SIZE_IN_BYTES:
-                result.setTotalSizeInBytes(0);
+                result.setAverageColumnLength(0);
                 return;
             case NUMBER_OF_DISTINCT_VALUES:
-                result.setDistinctValuesCount(0);
+                result.setDistinctValuesWithNullCount(0);
                 return;
             case NUMBER_OF_NON_NULL_VALUES:
                 result.setNullsCount(0);
@@ -331,7 +331,7 @@ public final class Statistics
                 .collect(toImmutableMap(statistics -> getPartitionValues(statistics, partitionColumns, partitionColumnTypes), Function.identity()));
     }
 
-    private static List<String> getPartitionValues(ComputedStatistics statistics, List<String> partitionColumns, List<Type> partitionColumnTypes)
+    public static List<String> getPartitionValues(ComputedStatistics statistics, List<String> partitionColumns, List<Type> partitionColumnTypes)
     {
         checkArgument(statistics.getGroupingColumns().equals(partitionColumns),
                 "Unexpected grouping. Partition columns: %s. Grouping columns: %s", partitionColumns, statistics.getGroupingColumns());
@@ -382,7 +382,9 @@ public final class Statistics
 
         // TOTAL_VALUES_SIZE_IN_BYTES
         if (computedStatistics.containsKey(TOTAL_SIZE_IN_BYTES)) {
-            result.setTotalSizeInBytes(getIntegerValue(BIGINT, computedStatistics.get(TOTAL_SIZE_IN_BYTES)));
+            OptionalLong totalSizeInBytes = getIntegerValue(BIGINT, computedStatistics.get(TOTAL_SIZE_IN_BYTES));
+            OptionalLong numNonNullValues = getIntegerValue(BIGINT, computedStatistics.get(NUMBER_OF_NON_NULL_VALUES));
+            result.setAverageColumnLength(getAverageColumnLength(totalSizeInBytes, numNonNullValues));
         }
 
         // NUMBER OF NULLS
@@ -395,12 +397,8 @@ public final class Statistics
             // number of distinct value is estimated using HLL, and can be higher than the number of non null values
             long numberOfNonNullValues = BIGINT.getLong(computedStatistics.get(NUMBER_OF_NON_NULL_VALUES), 0);
             long numberOfDistinctValues = BIGINT.getLong(computedStatistics.get(NUMBER_OF_DISTINCT_VALUES), 0);
-            if (numberOfDistinctValues > numberOfNonNullValues) {
-                result.setDistinctValuesCount(numberOfNonNullValues);
-            }
-            else {
-                result.setDistinctValuesCount(numberOfDistinctValues);
-            }
+             // Hive expects NDV to be one greater when column has a null
+            result.setDistinctValuesWithNullCount(Math.min(numberOfDistinctValues, numberOfNonNullValues) + (rowCount > numberOfNonNullValues ? 1 : 0));
         }
 
         // NUMBER OF FALSE, NUMBER OF TRUE
@@ -486,5 +484,18 @@ public final class Statistics
         SUBTRACT,
         MIN,
         MAX,
+    }
+
+    private static OptionalDouble getAverageColumnLength(OptionalLong totalSizeInBytes, OptionalLong numNonNullValues)
+    {
+        if (totalSizeInBytes.isEmpty() || numNonNullValues.isEmpty()) {
+            return OptionalDouble.empty();
+        }
+
+        long nonNullsCount = numNonNullValues.getAsLong();
+        if (nonNullsCount <= 0) {
+            return OptionalDouble.empty();
+        }
+        return OptionalDouble.of(((double) totalSizeInBytes.getAsLong()) / nonNullsCount);
     }
 }

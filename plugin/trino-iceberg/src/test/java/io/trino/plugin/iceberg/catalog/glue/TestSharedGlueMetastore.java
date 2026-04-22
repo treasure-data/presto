@@ -28,8 +28,9 @@ import io.trino.tpch.TpchTable;
 import org.testng.annotations.AfterClass;
 
 import java.nio.file.Path;
+import java.util.Optional;
 
-import static io.trino.plugin.hive.metastore.glue.GlueHiveMetastore.createTestingGlueHiveMetastore;
+import static io.trino.plugin.hive.metastore.glue.TestingGlueHiveMetastore.createTestingGlueHiveMetastore;
 import static io.trino.plugin.iceberg.IcebergQueryRunner.ICEBERG_CATALOG;
 import static io.trino.plugin.tpch.TpchMetadata.TINY_SCHEMA_NAME;
 import static io.trino.testing.QueryAssertions.copyTpchTables;
@@ -87,8 +88,8 @@ public class TestSharedGlueMetastore
                         "hive.metastore.glue.default-warehouse-dir", dataDirectory.toString(),
                         "iceberg.hive-catalog-name", "hive"));
 
-        this.glueMetastore = createTestingGlueHiveMetastore(dataDirectory);
-        queryRunner.installPlugin(new TestingHivePlugin(glueMetastore));
+        this.glueMetastore = createTestingGlueHiveMetastore(dataDirectory, this::closeAfterClass);
+        queryRunner.installPlugin(new TestingHivePlugin(dataDirectory, Optional.of(glueMetastore)));
         queryRunner.createCatalog(HIVE_CATALOG, "hive");
         queryRunner.createCatalog(
                 "hive_with_redirections",

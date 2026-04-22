@@ -14,11 +14,11 @@
 package io.trino.plugin.hive.s3;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.common.net.HostAndPort;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import io.trino.plugin.hive.HiveQueryRunner;
+import io.trino.plugin.hive.containers.Hive3MinioDataLake;
 import io.trino.plugin.hive.containers.HiveMinioDataLake;
 import io.trino.plugin.hive.metastore.thrift.BridgingHiveMetastore;
 import io.trino.plugin.hive.metastore.thrift.TestingTokenAwareMetastoreClientFactory;
@@ -26,6 +26,7 @@ import io.trino.plugin.hive.metastore.thrift.ThriftMetastoreConfig;
 import io.trino.testing.DistributedQueryRunner;
 import io.trino.tpch.TpchTable;
 
+import java.net.URI;
 import java.util.Locale;
 import java.util.Map;
 
@@ -33,6 +34,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static io.trino.plugin.hive.TestingThriftHiveMetastoreBuilder.testingThriftHiveMetastoreBuilder;
 import static io.trino.plugin.hive.security.HiveSecurityModule.ALLOW_ALL;
 import static io.trino.testing.containers.Minio.MINIO_ACCESS_KEY;
+import static io.trino.testing.containers.Minio.MINIO_REGION;
 import static io.trino.testing.containers.Minio.MINIO_SECRET_KEY;
 import static java.util.Objects.requireNonNull;
 
@@ -51,7 +53,7 @@ public final class S3HiveQueryRunner
     }
 
     public static DistributedQueryRunner create(
-            HostAndPort hiveMetastoreEndpoint,
+            URI hiveMetastoreEndpoint,
             String s3Endpoint,
             String s3AccessKey,
             String s3SecretKey,
@@ -74,6 +76,7 @@ public final class S3HiveQueryRunner
         return builder()
                 .setHiveMetastoreEndpoint(hiveMinioDataLake.getHiveHadoop().getHiveMetastoreEndpoint())
                 .setS3Endpoint("http://" + hiveMinioDataLake.getMinio().getMinioApiEndpoint())
+                .setS3Region(MINIO_REGION)
                 .setS3AccessKey(MINIO_ACCESS_KEY)
                 .setS3SecretKey(MINIO_SECRET_KEY)
                 .setBucketName(hiveMinioDataLake.getBucketName());
@@ -87,16 +90,17 @@ public final class S3HiveQueryRunner
     public static class Builder
             extends HiveQueryRunner.Builder<Builder>
     {
-        private HostAndPort hiveMetastoreEndpoint;
+        private URI hiveMetastoreEndpoint;
         private Duration thriftMetastoreTimeout = TestingTokenAwareMetastoreClientFactory.TIMEOUT;
         private ThriftMetastoreConfig thriftMetastoreConfig = new ThriftMetastoreConfig();
+        private String s3Region;
         private String s3Endpoint;
         private String s3AccessKey;
         private String s3SecretKey;
         private String bucketName;
 
         @CanIgnoreReturnValue
-        public Builder setHiveMetastoreEndpoint(HostAndPort hiveMetastoreEndpoint)
+        public Builder setHiveMetastoreEndpoint(URI hiveMetastoreEndpoint)
         {
             this.hiveMetastoreEndpoint = requireNonNull(hiveMetastoreEndpoint, "hiveMetastoreEndpoint is null");
             return this;
@@ -113,6 +117,13 @@ public final class S3HiveQueryRunner
         public Builder setThriftMetastoreConfig(ThriftMetastoreConfig thriftMetastoreConfig)
         {
             this.thriftMetastoreConfig = requireNonNull(thriftMetastoreConfig, "thriftMetastoreConfig is null");
+            return this;
+        }
+
+        @CanIgnoreReturnValue
+        public Builder setS3Region(String s3Region)
+        {
+            this.s3Region = requireNonNull(s3Region, "s3Region is null");
             return this;
         }
 
@@ -156,15 +167,17 @@ public final class S3HiveQueryRunner
             String lowerCaseS3Endpoint = s3Endpoint.toLowerCase(Locale.ENGLISH);
             checkArgument(lowerCaseS3Endpoint.startsWith("http://") || lowerCaseS3Endpoint.startsWith("https://"), "Expected http URI for S3 endpoint; got %s", s3Endpoint);
 
-            addHiveProperty("hive.s3.endpoint", s3Endpoint);
-            addHiveProperty("hive.s3.aws-access-key", s3AccessKey);
-            addHiveProperty("hive.s3.aws-secret-key", s3SecretKey);
-            addHiveProperty("hive.s3.path-style-access", "true");
+            addHiveProperty("fs.native-s3.enabled", "true");
+            addHiveProperty("s3.region", s3Region);
+            addHiveProperty("s3.endpoint", s3Endpoint);
+            addHiveProperty("s3.aws-access-key", s3AccessKey);
+            addHiveProperty("s3.aws-secret-key", s3SecretKey);
+            addHiveProperty("s3.path-style-access", "true");
             setMetastore(distributedQueryRunner -> new BridgingHiveMetastore(
                     testingThriftHiveMetastoreBuilder()
                             .metastoreClient(hiveMetastoreEndpoint, thriftMetastoreTimeout)
                             .thriftMetastoreConfig(thriftMetastoreConfig)
-                            .build()));
+                            .build(distributedQueryRunner::registerResource)));
             setInitialSchemasLocationBase("s3a://" + bucketName); // cannot use s3:// as Hive metastore is not configured to accept it
             return super.build();
         }
@@ -173,7 +186,7 @@ public final class S3HiveQueryRunner
     public static void main(String[] args)
             throws Exception
     {
-        HiveMinioDataLake hiveMinioDataLake = new HiveMinioDataLake("tpch");
+        HiveMinioDataLake hiveMinioDataLake = new Hive3MinioDataLake("tpch");
         hiveMinioDataLake.start();
 
         DistributedQueryRunner queryRunner = S3HiveQueryRunner.builder(hiveMinioDataLake)

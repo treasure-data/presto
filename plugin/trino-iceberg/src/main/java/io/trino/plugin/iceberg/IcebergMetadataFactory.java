@@ -13,14 +13,24 @@
  */
 package io.trino.plugin.iceberg;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.inject.Inject;
+import io.airlift.concurrent.BoundedExecutor;
 import io.airlift.json.JsonCodec;
-import io.trino.filesystem.TrinoFileSystemFactory;
+import io.trino.plugin.hive.metastore.HiveMetastoreFactory;
+import io.trino.plugin.hive.metastore.RawHiveMetastoreFactory;
 import io.trino.plugin.iceberg.catalog.TrinoCatalogFactory;
 import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.security.ConnectorIdentity;
 import io.trino.spi.type.TypeManager;
 
+import java.util.Optional;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.function.Predicate;
+
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static java.util.Objects.requireNonNull;
 
 public class IcebergMetadataFactory
@@ -29,8 +39,13 @@ public class IcebergMetadataFactory
     private final CatalogHandle trinoCatalogHandle;
     private final JsonCodec<CommitTaskData> commitTaskCodec;
     private final TrinoCatalogFactory catalogFactory;
-    private final TrinoFileSystemFactory fileSystemFactory;
+    private final IcebergFileSystemFactory fileSystemFactory;
     private final TableStatisticsWriter tableStatisticsWriter;
+    private final Optional<HiveMetastoreFactory> metastoreFactory;
+    private final boolean addFilesProcedureEnabled;
+    private final Predicate<String> allowedExtraProperties;
+    private final ExecutorService icebergScanExecutor;
+    private final Executor metadataFetchingExecutor;
 
     @Inject
     public IcebergMetadataFactory(
@@ -38,8 +53,12 @@ public class IcebergMetadataFactory
             CatalogHandle trinoCatalogHandle,
             JsonCodec<CommitTaskData> commitTaskCodec,
             TrinoCatalogFactory catalogFactory,
-            TrinoFileSystemFactory fileSystemFactory,
-            TableStatisticsWriter tableStatisticsWriter)
+            IcebergFileSystemFactory fileSystemFactory,
+            TableStatisticsWriter tableStatisticsWriter,
+            @RawHiveMetastoreFactory Optional<HiveMetastoreFactory> metastoreFactory,
+            @ForIcebergScanPlanning ExecutorService icebergScanExecutor,
+            @ForIcebergMetadata ExecutorService metadataExecutorService,
+            IcebergConfig config)
     {
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.trinoCatalogHandle = requireNonNull(trinoCatalogHandle, "trinoCatalogHandle is null");
@@ -47,6 +66,22 @@ public class IcebergMetadataFactory
         this.catalogFactory = requireNonNull(catalogFactory, "catalogFactory is null");
         this.fileSystemFactory = requireNonNull(fileSystemFactory, "fileSystemFactory is null");
         this.tableStatisticsWriter = requireNonNull(tableStatisticsWriter, "tableStatisticsWriter is null");
+        this.metastoreFactory = requireNonNull(metastoreFactory, "metastoreFactory is null");
+        this.icebergScanExecutor = requireNonNull(icebergScanExecutor, "icebergScanExecutor is null");
+        this.addFilesProcedureEnabled = config.isAddFilesProcedureEnabled();
+        if (config.getAllowedExtraProperties().equals(ImmutableList.of("*"))) {
+            this.allowedExtraProperties = ignore -> true;
+        }
+        else {
+            this.allowedExtraProperties = ImmutableSet.copyOf(requireNonNull(config.getAllowedExtraProperties(), "allowedExtraProperties is null"))::contains;
+        }
+
+        if (config.getMetadataParallelism() == 1) {
+            this.metadataFetchingExecutor = directExecutor();
+        }
+        else {
+            this.metadataFetchingExecutor = new BoundedExecutor(metadataExecutorService, config.getMetadataParallelism());
+        }
     }
 
     public IcebergMetadata create(ConnectorIdentity identity)
@@ -57,6 +92,11 @@ public class IcebergMetadataFactory
                 commitTaskCodec,
                 catalogFactory.create(identity),
                 fileSystemFactory,
-                tableStatisticsWriter);
+                tableStatisticsWriter,
+                metastoreFactory,
+                addFilesProcedureEnabled,
+                allowedExtraProperties,
+                icebergScanExecutor,
+                metadataFetchingExecutor);
     }
 }

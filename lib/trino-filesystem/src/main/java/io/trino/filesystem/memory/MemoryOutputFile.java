@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.FileAlreadyExistsException;
 
+import static io.airlift.slice.Slices.wrappedBuffer;
 import static java.util.Objects.requireNonNull;
 
 class MemoryOutputFile
@@ -54,6 +55,20 @@ class MemoryOutputFile
             throw new FileAlreadyExistsException(toString());
         }
         return new MemoryOutputStream(location, outputBlob::createBlob);
+    }
+
+    @Override
+    public void createOrOverwrite(byte[] data)
+            throws IOException
+    {
+        outputBlob.overwriteBlob(wrappedBuffer(data));
+    }
+
+    @Override
+    public void createExclusive(byte[] data)
+            throws IOException
+    {
+        outputBlob.createBlob(wrappedBuffer(data));
     }
 
     @Override

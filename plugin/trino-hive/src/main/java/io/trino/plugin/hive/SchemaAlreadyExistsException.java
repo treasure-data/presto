@@ -25,12 +25,22 @@ public class SchemaAlreadyExistsException
 
     public SchemaAlreadyExistsException(String schemaName)
     {
-        this(schemaName, format("Schema already exists: '%s'", schemaName));
+        this(schemaName, (Throwable) null);
     }
 
     public SchemaAlreadyExistsException(String schemaName, String message)
     {
-        super(ALREADY_EXISTS, message);
+        this(schemaName, message, null);
+    }
+
+    public SchemaAlreadyExistsException(String schemaName, Throwable cause)
+    {
+        this(schemaName, format("Schema already exists: '%s'", schemaName), cause);
+    }
+
+    public SchemaAlreadyExistsException(String schemaName, String message, Throwable cause)
+    {
+        super(ALREADY_EXISTS, message, cause);
         this.schemaName = schemaName;
     }
 

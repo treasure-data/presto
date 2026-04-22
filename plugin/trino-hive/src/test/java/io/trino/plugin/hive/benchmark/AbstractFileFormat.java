@@ -16,9 +16,9 @@ package io.trino.plugin.hive.benchmark;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Maps;
 import io.trino.filesystem.Location;
 import io.trino.hdfs.HdfsEnvironment;
-import io.trino.plugin.hive.GenericHiveRecordCursorProvider;
 import io.trino.plugin.hive.HiveColumnHandle;
 import io.trino.plugin.hive.HiveConfig;
 import io.trino.plugin.hive.HivePageSourceFactory;
@@ -31,7 +31,7 @@ import io.trino.plugin.hive.HiveTableHandle;
 import io.trino.plugin.hive.HiveType;
 import io.trino.plugin.hive.HiveTypeName;
 import io.trino.plugin.hive.ReaderPageSource;
-import io.trino.plugin.hive.TableToPartitionMapping;
+import io.trino.plugin.hive.Schema;
 import io.trino.spi.SplitWeight;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorPageSource;
@@ -125,13 +125,10 @@ public abstract class AbstractFileFormat
     {
         HivePageSourceProvider factory = new HivePageSourceProvider(
                 TESTING_TYPE_MANAGER,
-                hdfsEnvironment,
                 new HiveConfig(),
-                getHivePageSourceFactory(hdfsEnvironment).map(ImmutableSet::of).orElse(ImmutableSet.of()),
-                getHiveRecordCursorProvider(hdfsEnvironment).map(ImmutableSet::of).orElse(ImmutableSet.of()),
-                new GenericHiveRecordCursorProvider(hdfsEnvironment, new HiveConfig()));
+                getHivePageSourceFactory(hdfsEnvironment).map(ImmutableSet::of).orElse(ImmutableSet.of()));
 
-        Properties schema = createSchema(getFormat(), schemaColumnNames, schemaColumnTypes);
+        Schema schema = createSchema(getFormat(), schemaColumnNames, schemaColumnTypes);
 
         HiveSplit split = new HiveSplit(
                 "",
@@ -142,14 +139,12 @@ public abstract class AbstractFileFormat
                 targetFile.lastModified(),
                 schema,
                 ImmutableList.of(),
-                ImmutableList.of(),
                 OptionalInt.empty(),
                 OptionalInt.empty(),
                 false,
-                TableToPartitionMapping.empty(),
+                ImmutableMap.of(),
                 Optional.empty(),
                 Optional.empty(),
-                false,
                 Optional.empty(),
                 SplitWeight.standard());
 
@@ -186,7 +181,7 @@ public abstract class AbstractFileFormat
                 0,
                 targetFile.length(),
                 targetFile.length(),
-                createSchema(format, columnNames, columnTypes),
+                createSchema(format, columnNames, columnTypes).serdeProperties(),
                 readColumns,
                 TupleDomain.all(),
                 TESTING_TYPE_MANAGER,
@@ -209,7 +204,7 @@ public abstract class AbstractFileFormat
 
         List<HiveColumnHandle> readColumns = getBaseColumns(columnNames, columnTypes);
 
-        Properties schema = createSchema(format, columnNames, columnTypes);
+        Schema schema = createSchema(format, columnNames, columnTypes);
         Optional<ReaderPageSource> readerPageSourceWithProjections = pageSourceFactory
                 .createPageSource(
                         session,
@@ -217,6 +212,7 @@ public abstract class AbstractFileFormat
                         0,
                         targetFile.length(),
                         targetFile.length(),
+                        targetFile.lastModified(),
                         schema,
                         readColumns,
                         TupleDomain.all(),
@@ -244,7 +240,7 @@ public abstract class AbstractFileFormat
                 .collect(toImmutableList());
     }
 
-    static Properties createSchema(HiveStorageFormat format, List<String> columnNames, List<Type> columnTypes)
+    static Schema createSchema(HiveStorageFormat format, List<String> columnNames, List<Type> columnTypes)
     {
         Properties schema = new Properties();
         schema.setProperty(SERIALIZATION_LIB, format.getSerde());
@@ -255,6 +251,6 @@ public abstract class AbstractFileFormat
                 .map(HiveType::getHiveTypeName)
                 .map(HiveTypeName::toString)
                 .collect(joining(":")));
-        return schema;
+        return new Schema(format.getSerde(), false, Maps.fromProperties(schema));
     }
 }

@@ -14,6 +14,7 @@
 package io.trino.plugin.hive.metastore.thrift;
 
 import io.trino.hive.thrift.metastore.ColumnStatisticsObj;
+import io.trino.hive.thrift.metastore.DataOperationType;
 import io.trino.hive.thrift.metastore.Database;
 import io.trino.hive.thrift.metastore.EnvironmentContext;
 import io.trino.hive.thrift.metastore.FieldSchema;
@@ -27,15 +28,14 @@ import io.trino.hive.thrift.metastore.PrivilegeBag;
 import io.trino.hive.thrift.metastore.Role;
 import io.trino.hive.thrift.metastore.RolePrincipalGrant;
 import io.trino.hive.thrift.metastore.Table;
+import io.trino.hive.thrift.metastore.TableMeta;
 import io.trino.hive.thrift.metastore.TxnToWriteId;
-import io.trino.plugin.hive.acid.AcidOperation;
-import io.trino.spi.connector.SchemaTableName;
 import org.apache.thrift.TException;
 
 import java.io.Closeable;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
+import java.util.Set;
 
 public interface ThriftMetastoreClient
         extends Closeable
@@ -49,19 +49,10 @@ public interface ThriftMetastoreClient
     Database getDatabase(String databaseName)
             throws TException;
 
-    List<String> getAllTables(String databaseName)
+    List<TableMeta> getTableMeta(String databaseName)
             throws TException;
 
-    Optional<List<SchemaTableName>> getAllTables()
-            throws TException;
-
-    List<String> getAllViews(String databaseName)
-            throws TException;
-
-    Optional<List<SchemaTableName>> getAllViews()
-            throws TException;
-
-    List<String> getTablesWithParameter(String databaseName, String parameterKey, String parameterValue)
+    List<String> getTableNamesWithParameters(String databaseName, String parameterKey, Set<String> parameterValues)
             throws TException;
 
     void createDatabase(Database database)
@@ -154,9 +145,6 @@ public interface ThriftMetastoreClient
     void revokeRole(String role, String granteeName, PrincipalType granteeType, boolean grantOption)
             throws TException;
 
-    List<RolePrincipalGrant> listGrantedPrincipals(String role)
-            throws TException;
-
     List<RolePrincipalGrant> listRoleGrants(String name, PrincipalType principalType)
             throws TException;
 
@@ -205,7 +193,7 @@ public interface ThriftMetastoreClient
     void alterPartitions(String dbName, String tableName, List<Partition> partitions, long writeId)
             throws TException;
 
-    void addDynamicPartitions(String dbName, String tableName, List<String> partitionNames, long transactionId, long writeId, AcidOperation operation)
+    void addDynamicPartitions(String dbName, String tableName, List<String> partitionNames, long transactionId, long writeId, DataOperationType operation)
             throws TException;
 
     void alterTransactionalTable(Table table, long transactionId, long writeId, EnvironmentContext context)

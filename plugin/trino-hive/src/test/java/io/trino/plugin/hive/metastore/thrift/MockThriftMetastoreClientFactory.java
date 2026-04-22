@@ -26,16 +26,16 @@ import static com.google.common.collect.ImmutableMap.toImmutableMap;
 public class MockThriftMetastoreClientFactory
         implements ThriftMetastoreClientFactory
 {
-    private final Map<HostAndPort, Optional<ThriftMetastoreClient>> clients;
+    private final Map<URI, Optional<ThriftMetastoreClient>> clients;
 
     public MockThriftMetastoreClientFactory(Map<String, Optional<ThriftMetastoreClient>> clients)
     {
         this.clients = clients.entrySet().stream()
-                .collect(toImmutableMap(entry -> createHostAndPort(entry.getKey()), Map.Entry::getValue));
+                .collect(toImmutableMap(entry -> URI.create(entry.getKey()), Map.Entry::getValue));
     }
 
     @Override
-    public ThriftMetastoreClient create(HostAndPort address, Optional<String> delegationToken)
+    public ThriftMetastoreClient create(URI address, Optional<String> delegationToken)
             throws TTransportException
     {
         checkArgument(delegationToken.isEmpty(), "delegation token is not supported");

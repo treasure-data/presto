@@ -34,7 +34,8 @@ import org.testng.annotations.Test;
 
 import java.io.File;
 
-import static io.trino.plugin.hive.metastore.cache.CachingHiveMetastore.memoizeMetastore;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
+import static io.trino.plugin.hive.metastore.cache.CachingHiveMetastore.createPerTransactionCache;
 import static io.trino.plugin.hive.metastore.file.TestingFileHiveMetastore.createTestingFileHiveMetastore;
 import static io.trino.plugin.iceberg.IcebergTestUtils.getFileSystemFactory;
 import static org.testng.Assert.assertEquals;
@@ -54,7 +55,7 @@ public class TestIcebergMergeAppend
         HiveMetastore metastore = createTestingFileHiveMetastore(baseDir);
         TrinoFileSystemFactory fileSystemFactory = getFileSystemFactory(queryRunner);
         tableOperationsProvider = new FileMetastoreTableOperationsProvider(fileSystemFactory);
-        CachingHiveMetastore cachingHiveMetastore = memoizeMetastore(metastore, 1000);
+        CachingHiveMetastore cachingHiveMetastore = createPerTransactionCache(metastore, 1000);
         trinoCatalog = new TrinoHiveCatalog(
                 new CatalogName("catalog"),
                 cachingHiveMetastore,
@@ -64,7 +65,9 @@ public class TestIcebergMergeAppend
                 tableOperationsProvider,
                 false,
                 false,
-                false);
+                false,
+                new IcebergConfig().isHideMaterializedViewStorageTable(),
+                directExecutor());
 
         return queryRunner;
     }

@@ -14,10 +14,10 @@
 package io.trino.plugin.hive.metastore.file;
 
 import com.google.common.collect.ImmutableMap;
+import io.trino.filesystem.local.LocalFileSystemFactory;
 import io.trino.plugin.hive.NodeVersion;
 import io.trino.plugin.hive.metastore.Column;
 import io.trino.plugin.hive.metastore.Database;
-import io.trino.plugin.hive.metastore.HiveMetastoreConfig;
 import io.trino.plugin.hive.metastore.StorageFormat;
 import io.trino.plugin.hive.metastore.Table;
 import org.apache.hadoop.hive.metastore.TableType;
@@ -29,65 +29,66 @@ import org.testng.annotations.Test;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
-import static io.trino.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
+import static io.trino.plugin.hive.HiveMetadata.TRINO_QUERY_ID_NAME;
 import static io.trino.plugin.hive.HiveType.HIVE_INT;
 import static io.trino.plugin.hive.metastore.PrincipalPrivileges.NO_PRIVILEGES;
 import static io.trino.plugin.hive.util.HiveClassNames.HUDI_PARQUET_INPUT_FORMAT;
-import static io.trino.spi.security.PrincipalType.USER;
 import static io.trino.testing.TestingNames.randomNameSuffix;
 import static java.nio.file.Files.createTempDirectory;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestFileHiveMetastore
 {
-    private Path tmpDir;
+    private Path tempDir;
     private FileHiveMetastore metastore;
 
     @BeforeClass
     public void setUp()
             throws IOException
     {
-        tmpDir = createTempDirectory(getClass().getSimpleName());
+        tempDir = createTempDirectory(getClass().getSimpleName());
+        LocalFileSystemFactory fileSystemFactory = new LocalFileSystemFactory(tempDir);
 
         metastore = new FileHiveMetastore(
                 new NodeVersion("testversion"),
-                HDFS_ENVIRONMENT,
-                new HiveMetastoreConfig().isHideDeltaLakeTables(),
+                fileSystemFactory,
+                false,
                 new FileHiveMetastoreConfig()
-                        .setCatalogDirectory(tmpDir.toString())
-                        .setDisableLocationChecks(true)
-                /*.setMetastoreUser("test")*/);
-
-        metastore.createDatabase(Database.builder()
-                .setDatabaseName("default")
-                .setOwnerName(Optional.of("test"))
-                .setOwnerType(Optional.of(USER))
-                .build());
+                        .setCatalogDirectory("local:///")
+                        .setMetastoreUser("test")
+                        .setDisableLocationChecks(true));
     }
 
     @AfterClass(alwaysRun = true)
     public void tearDown()
             throws IOException
     {
-        deleteRecursively(tmpDir, ALLOW_INSECURE);
-        metastore = null;
-        tmpDir = null;
+        deleteRecursively(tempDir, ALLOW_INSECURE);
     }
 
     @Test
     public void testPreserveHudiInputFormat()
     {
+        String databaseName = "test_database_" + randomNameSuffix();
+        Database.Builder database = Database.builder()
+                .setDatabaseName(databaseName)
+                .setParameters(Map.of(TRINO_QUERY_ID_NAME, "query_id"))
+                .setOwnerName(Optional.empty())
+                .setOwnerType(Optional.empty());
+        metastore.createDatabase(database.build());
+
         StorageFormat storageFormat = StorageFormat.create(
                 ParquetHiveSerDe.class.getName(),
                 HUDI_PARQUET_INPUT_FORMAT,
                 MapredParquetOutputFormat.class.getName());
 
         Table table = Table.builder()
-                .setDatabaseName("default")
+                .setDatabaseName(databaseName)
                 .setTableName("some_table_name" + randomNameSuffix())
                 .setTableType(TableType.EXTERNAL_TABLE.name())
                 .setOwner(Optional.of("public"))

@@ -13,11 +13,15 @@
  */
 package io.trino.plugin.iceberg.catalog.nessie;
 
+import com.google.common.cache.Cache;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
+import com.google.common.util.concurrent.UncheckedExecutionException;
+import io.trino.cache.EvictableCacheBuilder;
 import io.trino.filesystem.TrinoFileSystemFactory;
 import io.trino.plugin.base.CatalogName;
+import io.trino.plugin.hive.metastore.TableInfo;
 import io.trino.plugin.iceberg.catalog.AbstractTrinoCatalog;
 import io.trino.plugin.iceberg.catalog.IcebergTableOperationsProvider;
 import io.trino.spi.TrinoException;
@@ -36,7 +40,6 @@ import org.apache.iceberg.BaseTable;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.SortOrder;
-import org.apache.iceberg.Table;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.TableOperations;
 import org.apache.iceberg.Transaction;
@@ -49,11 +52,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
+import static com.google.common.base.Throwables.throwIfUnchecked;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static io.trino.cache.CacheUtils.uncheckedCacheGet;
 import static io.trino.filesystem.Locations.appendPath;
 import static io.trino.plugin.iceberg.IcebergSchemaProperties.LOCATION_PROPERTY;
 import static io.trino.plugin.iceberg.IcebergUtil.getIcebergTableWithMetadata;
@@ -67,10 +71,15 @@ import static java.util.Objects.requireNonNull;
 public class TrinoNessieCatalog
         extends AbstractTrinoCatalog
 {
+    private static final int PER_QUERY_CACHE_SIZE = 1000;
+
     private final String warehouseLocation;
     private final NessieIcebergClient nessieClient;
-    private final Map<SchemaTableName, TableMetadata> tableMetadataCache = new ConcurrentHashMap<>();
     private final TrinoFileSystemFactory fileSystemFactory;
+
+    private final Cache<SchemaTableName, TableMetadata> tableMetadataCache = EvictableCacheBuilder.newBuilder()
+            .maximumSize(PER_QUERY_CACHE_SIZE)
+            .build();
 
     public TrinoNessieCatalog(
             CatalogName catalogName,
@@ -81,7 +90,7 @@ public class TrinoNessieCatalog
             String warehouseLocation,
             boolean useUniqueTableLocation)
     {
-        super(catalogName, typeManager, tableOperationsProvider, useUniqueTableLocation);
+        super(catalogName, typeManager, tableOperationsProvider, fileSystemFactory, useUniqueTableLocation);
         this.fileSystemFactory = requireNonNull(fileSystemFactory, "fileSystemFactory is null");
         this.warehouseLocation = requireNonNull(warehouseLocation, "warehouseLocation is null");
         this.nessieClient = requireNonNull(nessieClient, "nessieClient is null");
@@ -153,11 +162,20 @@ public class TrinoNessieCatalog
     }
 
     @Override
-    public List<SchemaTableName> listTables(ConnectorSession session, Optional<String> namespace)
+    public List<TableInfo> listTables(ConnectorSession session, Optional<String> namespace)
     {
+        // views and materialized views are currently not supported, so everything is a table
         return nessieClient.listTables(namespace.isEmpty() ? Namespace.empty() : Namespace.of(namespace.get()))
                 .stream()
-                .map(id -> schemaTableName(id.namespace().toString(), id.name()))
+                .map(id -> new TableInfo(schemaTableName(id.namespace().toString(), id.name()), TableInfo.ExtendedRelationType.TABLE))
+                .collect(toImmutableList());
+    }
+
+    @Override
+    public List<SchemaTableName> listIcebergTables(ConnectorSession session, Optional<String> namespace)
+    {
+        return listTables(session, namespace).stream()
+                .map(TableInfo::tableName)
                 .collect(toImmutableList());
     }
 
@@ -182,21 +200,28 @@ public class TrinoNessieCatalog
     }
 
     @Override
-    public Table loadTable(ConnectorSession session, SchemaTableName table)
+    public BaseTable loadTable(ConnectorSession session, SchemaTableName table)
     {
-        TableMetadata metadata = tableMetadataCache.computeIfAbsent(
-                table,
-                ignore -> {
-                    TableOperations operations = tableOperationsProvider.createTableOperations(
-                            this,
-                            session,
-                            table.getSchemaName(),
-                            table.getTableName(),
-                            Optional.empty(),
-                            Optional.empty());
-                    return new BaseTable(operations, quotedTableName(table)).operations().current();
-                });
-
+        TableMetadata metadata;
+        try {
+            metadata = uncheckedCacheGet(
+                    tableMetadataCache,
+                    table,
+                    () -> {
+                        TableOperations operations = tableOperationsProvider.createTableOperations(
+                                this,
+                                session,
+                                table.getSchemaName(),
+                                table.getTableName(),
+                                Optional.empty(),
+                                Optional.empty());
+                        return new BaseTable(operations, quotedTableName(table)).operations().current();
+                    });
+        }
+        catch (UncheckedExecutionException e) {
+            throwIfUnchecked(e.getCause());
+            throw e;
+        }
         return getIcebergTableWithMetadata(
                 this,
                 tableOperationsProvider,
@@ -218,6 +243,7 @@ public class TrinoNessieCatalog
         validateTableCanBeDropped(table);
         nessieClient.dropTable(toIdentifier(schemaTableName), true);
         deleteTableDirectory(fileSystemFactory.create(session), schemaTableName, table.location());
+        invalidateTableCache(schemaTableName);
     }
 
     @Override
@@ -230,6 +256,7 @@ public class TrinoNessieCatalog
     public void renameTable(ConnectorSession session, SchemaTableName from, SchemaTableName to)
     {
         nessieClient.renameTable(toIdentifier(from), toIdentifier(to));
+        invalidateTableCache(from);
     }
 
     @Override
@@ -239,10 +266,31 @@ public class TrinoNessieCatalog
             Schema schema,
             PartitionSpec partitionSpec,
             SortOrder sortOrder,
-            String location,
+            Optional<String> location,
             Map<String, String> properties)
     {
         return newCreateTableTransaction(
+                session,
+                schemaTableName,
+                schema,
+                partitionSpec,
+                sortOrder,
+                location,
+                properties,
+                Optional.of(session.getUser()));
+    }
+
+    @Override
+    public Transaction newCreateOrReplaceTableTransaction(
+            ConnectorSession session,
+            SchemaTableName schemaTableName,
+            Schema schema,
+            PartitionSpec partitionSpec,
+            SortOrder sortOrder,
+            String location,
+            Map<String, String> properties)
+    {
+        return newCreateOrReplaceTableTransaction(
                 session,
                 schemaTableName,
                 schema,
@@ -347,16 +395,11 @@ public class TrinoNessieCatalog
     }
 
     @Override
-    public List<SchemaTableName> listMaterializedViews(ConnectorSession session, Optional<String> namespace)
-    {
-        return ImmutableList.of();
-    }
-
-    @Override
     public void createMaterializedView(
             ConnectorSession session,
             SchemaTableName schemaViewName,
             ConnectorMaterializedViewDefinition definition,
+            Map<String, Object> materializedViewProperties,
             boolean replace,
             boolean ignoreExisting)
     {
@@ -376,6 +419,12 @@ public class TrinoNessieCatalog
     }
 
     @Override
+    public Optional<BaseTable> getMaterializedViewStorageTable(ConnectorSession session, SchemaTableName viewName)
+    {
+        throw new TrinoException(NOT_SUPPORTED, "The Iceberg Nessie catalog does not support materialized views");
+    }
+
+    @Override
     protected Optional<ConnectorMaterializedViewDefinition> doGetMaterializedView(ConnectorSession session, SchemaTableName schemaViewName)
     {
         return Optional.empty();
@@ -391,5 +440,11 @@ public class TrinoNessieCatalog
     public Optional<CatalogSchemaTableName> redirectTable(ConnectorSession session, SchemaTableName tableName, String hiveCatalogName)
     {
         return Optional.empty();
+    }
+
+    @Override
+    protected void invalidateTableCache(SchemaTableName schemaTableName)
+    {
+        tableMetadataCache.invalidate(schemaTableName);
     }
 }

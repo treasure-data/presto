@@ -77,7 +77,7 @@ public class HiveMetadataRecorder
         String recordingPath = getResourcePath(format("%s/%s.json.gz", recordingDir, schema));
         Path.of(recordingPath).toFile().getParentFile().mkdirs();
 
-        queryRunner.installPlugin(new TestingHivePlugin());
+        queryRunner.installPlugin(new TestingHivePlugin(Path.of(recordingPath)));
         queryRunner.createCatalog("hive", "hive", configBuilder
                 .putAll(loadPropertiesFrom(configPath))
                 .put("hive.metastore-recording-path", recordingPath)

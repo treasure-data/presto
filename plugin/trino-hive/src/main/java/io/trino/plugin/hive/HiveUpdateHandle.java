@@ -18,7 +18,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import io.trino.plugin.hive.util.HiveBucketing.BucketingVersion;
 
 import java.util.List;
-import java.util.OptionalInt;
 
 public class HiveUpdateHandle
         extends HivePartitioningHandle
@@ -28,9 +27,8 @@ public class HiveUpdateHandle
             @JsonProperty("bucketingVersion") BucketingVersion bucketingVersion,
             @JsonProperty("bucketCount") int bucketCount,
             @JsonProperty("hiveBucketTypes") List<HiveType> hiveTypes,
-            @JsonProperty("maxCompatibleBucketCount") OptionalInt maxCompatibleBucketCount,
             @JsonProperty("usePartitionedBucketing") boolean usePartitionedBucketing)
     {
-        super(bucketingVersion, bucketCount, hiveTypes, maxCompatibleBucketCount, usePartitionedBucketing);
+        super(bucketingVersion, bucketCount, hiveTypes, usePartitionedBucketing);
     }
 }

@@ -23,6 +23,7 @@ import io.trino.parquet.DataPageV1;
 import io.trino.parquet.DataPageV2;
 import io.trino.parquet.DictionaryPage;
 import io.trino.parquet.Page;
+import io.trino.parquet.ParquetDataSourceId;
 import io.trino.parquet.ParquetEncoding;
 import io.trino.parquet.ParquetReaderOptions;
 import io.trino.parquet.PrimitiveField;
@@ -538,7 +539,7 @@ public abstract class AbstractColumnReaderTest
         // Create reader
         PrimitiveField field = createField(format, true);
         AggregatedMemoryContext memoryContext = newSimpleAggregatedMemoryContext();
-        ColumnReaderFactory columnReaderFactory = new ColumnReaderFactory(UTC, new ParquetReaderOptions().withBatchColumnReaders(true));
+        ColumnReaderFactory columnReaderFactory = new ColumnReaderFactory(UTC, new ParquetReaderOptions());
         ColumnReader reader = columnReaderFactory.create(field, memoryContext);
         // Write data
         DictionaryValuesWriter dictionaryWriter = format.getDictionaryWriter();
@@ -687,6 +688,7 @@ public abstract class AbstractColumnReaderTest
             pagesBuilder.add(dictionaryPage);
         }
         return new PageReader(
+                new ParquetDataSourceId("test"),
                 UNCOMPRESSED,
                 pagesBuilder.addAll(dataPages).build().iterator(),
                 dataPages.stream()

@@ -14,15 +14,15 @@
 package io.trino.operator;
 
 import io.trino.spi.Page;
+import io.trino.spi.PageBlockUtil;
 import io.trino.spi.block.Block;
-import io.trino.spi.block.ColumnarRow;
 import io.trino.spi.block.RunLengthEncodedBlock;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static io.trino.spi.block.ColumnarRow.toColumnarRow;
+import static io.trino.spi.block.RowBlock.getRowFieldsFromBlock;
 import static io.trino.spi.predicate.Utils.nativeValueToBlock;
 import static io.trino.spi.type.TinyintType.TINYINT;
 import static java.util.Objects.requireNonNull;
@@ -67,18 +67,16 @@ public class ChangeOnlyUpdatedColumnsMergeProcessor
         // TODO: Check with Karol to see if we can get empty pages
         checkArgument(positionCount > 0, "positionCount should be > 0, but is %s", positionCount);
 
-        ColumnarRow mergeRow = toColumnarRow(inputPage.getBlock(mergeRowChannel));
-        checkArgument(!mergeRow.mayHaveNull(), "The mergeRow may not have null rows");
-
-        // We've verified that the mergeRow block has no null rows, so it's okay to get the field blocks
-
-        List<Block> builder = new ArrayList<>(dataColumnChannels.size() + 3);
-
+        Block mergeRow = inputPage.getBlock(mergeRowChannel).getLoadedBlock();
+        List<Block> fields = getRowFieldsFromBlock(mergeRow);
+        List<Block> builder = new ArrayList<>(dataColumnChannels.size() + 4);
         for (int channel : dataColumnChannels) {
-            builder.add(mergeRow.getField(channel));
+            builder.add(fields.get(channel));
         }
-        Block operationChannelBlock = mergeRow.getField(mergeRow.getFieldCount() - 2);
+        Block operationChannelBlock = fields.get(fields.size() - 2);
         builder.add(operationChannelBlock);
+        Block caseNumberChannelBlock = fields.get(fields.size() - 1);
+        builder.add(caseNumberChannelBlock);
         builder.add(inputPage.getBlock(rowIdChannel));
         builder.add(RunLengthEncodedBlock.create(INSERT_FROM_UPDATE_BLOCK, positionCount));
 
@@ -86,7 +84,7 @@ public class ChangeOnlyUpdatedColumnsMergeProcessor
 
         int defaultCaseCount = 0;
         for (int position = 0; position < positionCount; position++) {
-            if (TINYINT.getByte(operationChannelBlock, position) == DEFAULT_CASE_OPERATION_NUMBER) {
+            if (mergeRow.isNull(position)) {
                 defaultCaseCount++;
             }
         }
@@ -97,7 +95,7 @@ public class ChangeOnlyUpdatedColumnsMergeProcessor
         int usedCases = 0;
         int[] positions = new int[positionCount - defaultCaseCount];
         for (int position = 0; position < positionCount; position++) {
-            if (TINYINT.getByte(operationChannelBlock, position) != DEFAULT_CASE_OPERATION_NUMBER) {
+            if (!mergeRow.isNull(position)) {
                 positions[usedCases] = position;
                 usedCases++;
             }
@@ -105,6 +103,6 @@ public class ChangeOnlyUpdatedColumnsMergeProcessor
 
         checkArgument(usedCases + defaultCaseCount == positionCount, "usedCases (%s) + defaultCaseCount (%s) != positionCount (%s)", usedCases, defaultCaseCount, positionCount);
 
-        return result.getPositions(positions, 0, usedCases);
+        return PageBlockUtil.getPositions(result, positions, 0, usedCases);
     }
 }

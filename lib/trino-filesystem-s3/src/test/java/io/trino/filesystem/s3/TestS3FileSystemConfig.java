@@ -16,6 +16,7 @@ package io.trino.filesystem.s3;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.net.HostAndPort;
 import io.airlift.units.DataSize;
+import io.airlift.units.Duration;
 import io.trino.filesystem.s3.S3FileSystemConfig.S3SseType;
 import org.junit.jupiter.api.Test;
 
@@ -25,6 +26,10 @@ import static io.airlift.configuration.testing.ConfigAssertions.assertFullMappin
 import static io.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
 import static io.airlift.configuration.testing.ConfigAssertions.recordDefaults;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
+import static io.trino.filesystem.s3.S3FileSystemConfig.RetryMode.LEGACY;
+import static io.trino.filesystem.s3.S3FileSystemConfig.RetryMode.STANDARD;
+import static io.trino.filesystem.s3.S3FileSystemConfig.StorageClassType.STANDARD_IA;
+import static java.util.concurrent.TimeUnit.MINUTES;
 
 public class TestS3FileSystemConfig
 {
@@ -42,13 +47,30 @@ public class TestS3FileSystemConfig
                 .setExternalId(null)
                 .setStsEndpoint(null)
                 .setStsRegion(null)
+                .setStorageClass(S3FileSystemConfig.StorageClassType.STANDARD)
+                .setCannedAcl(S3FileSystemConfig.ObjectCannedAcl.NONE)
                 .setSseType(S3SseType.NONE)
+                .setRetryMode(LEGACY)
+                .setMaxErrorRetries(10)
                 .setSseKmsKeyId(null)
+                .setUseWebIdentityTokenCredentialsProvider(false)
+                .setSseCustomerKey(null)
                 .setStreamingPartSize(DataSize.of(16, MEGABYTE))
                 .setRequesterPays(false)
-                .setMaxConnections(null)
+                .setMaxConnections(500)
+                .setConnectionTtl(null)
+                .setConnectionMaxIdleTime(null)
+                .setSocketConnectTimeout(null)
+                .setSocketReadTimeout(null)
+                .setTcpKeepAlive(false)
                 .setHttpProxy(null)
-                .setHttpProxySecure(false));
+                .setHttpProxySecure(false)
+                .setNonProxyHosts(null)
+                .setHttpProxyUsername(null)
+                .setHttpProxyPassword(null)
+                .setHttpProxyPreemptiveBasicProxyAuth(false)
+                .setSupportsExclusiveCreate(true)
+                .setApplicationId("Trino"));
     }
 
     @Test
@@ -65,13 +87,30 @@ public class TestS3FileSystemConfig
                 .put("s3.external-id", "myid")
                 .put("s3.sts.endpoint", "sts.example.com")
                 .put("s3.sts.region", "us-west-2")
+                .put("s3.storage-class", "STANDARD_IA")
+                .put("s3.canned-acl", "BUCKET_OWNER_FULL_CONTROL")
+                .put("s3.retry-mode", "STANDARD")
+                .put("s3.max-error-retries", "12")
                 .put("s3.sse.type", "KMS")
                 .put("s3.sse.kms-key-id", "mykey")
+                .put("s3.sse.customer-key", "customerKey")
+                .put("s3.use-web-identity-token-credentials-provider", "true")
                 .put("s3.streaming.part-size", "42MB")
                 .put("s3.requester-pays", "true")
                 .put("s3.max-connections", "42")
+                .put("s3.connection-ttl", "1m")
+                .put("s3.connection-max-idle-time", "2m")
+                .put("s3.socket-connect-timeout", "3m")
+                .put("s3.socket-read-timeout", "4m")
+                .put("s3.tcp-keep-alive", "true")
                 .put("s3.http-proxy", "localhost:8888")
                 .put("s3.http-proxy.secure", "true")
+                .put("s3.http-proxy.non-proxy-hosts", "test1,test2,test3")
+                .put("s3.http-proxy.username", "test")
+                .put("s3.http-proxy.password", "test")
+                .put("s3.http-proxy.preemptive-basic-auth", "true")
+                .put("s3.exclusive-create", "false")
+                .put("s3.application-id", "application id")
                 .buildOrThrow();
 
         S3FileSystemConfig expected = new S3FileSystemConfig()
@@ -85,13 +124,30 @@ public class TestS3FileSystemConfig
                 .setExternalId("myid")
                 .setStsEndpoint("sts.example.com")
                 .setStsRegion("us-west-2")
+                .setStorageClass(STANDARD_IA)
+                .setCannedAcl(S3FileSystemConfig.ObjectCannedAcl.BUCKET_OWNER_FULL_CONTROL)
                 .setStreamingPartSize(DataSize.of(42, MEGABYTE))
+                .setRetryMode(STANDARD)
+                .setMaxErrorRetries(12)
                 .setSseType(S3SseType.KMS)
                 .setSseKmsKeyId("mykey")
+                .setUseWebIdentityTokenCredentialsProvider(true)
+                .setSseCustomerKey("customerKey")
                 .setRequesterPays(true)
                 .setMaxConnections(42)
+                .setConnectionTtl(new Duration(1, MINUTES))
+                .setConnectionMaxIdleTime(new Duration(2, MINUTES))
+                .setSocketConnectTimeout(new Duration(3, MINUTES))
+                .setSocketReadTimeout(new Duration(4, MINUTES))
+                .setTcpKeepAlive(true)
                 .setHttpProxy(HostAndPort.fromParts("localhost", 8888))
-                .setHttpProxySecure(true);
+                .setHttpProxySecure(true)
+                .setNonProxyHosts("test1, test2, test3")
+                .setHttpProxyUsername("test")
+                .setHttpProxyPassword("test")
+                .setHttpProxyPreemptiveBasicProxyAuth(true)
+                .setSupportsExclusiveCreate(false)
+                .setApplicationId("application id");
 
         assertFullMapping(properties, expected);
     }

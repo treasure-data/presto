@@ -78,6 +78,8 @@ import java.util.function.Function;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Throwables.throwIfInstanceOf;
 import static com.google.common.base.Throwables.throwIfUnchecked;
 import static com.google.inject.util.Modules.EMPTY_MODULE;
 import static io.airlift.log.Level.DEBUG;
@@ -198,6 +200,22 @@ public class DistributedQueryRunner
         this.trinoClient = closer.register(new TestingTrinoClient(coordinator, defaultSession));
 
         waitForAllNodesGloballyVisible();
+    }
+
+    public void registerResource(AutoCloseable resource)
+    {
+        requireNonNull(resource, "resource is null");
+        checkState(!closed, "already closed");
+        closer.register(() -> {
+            try {
+                resource.close();
+            }
+            catch (Exception e) {
+                throwIfUnchecked(e);
+                throwIfInstanceOf(e, IOException.class);
+                throw new RuntimeException(e);
+            }
+        });
     }
 
     private TestingTrinoServer createServer(

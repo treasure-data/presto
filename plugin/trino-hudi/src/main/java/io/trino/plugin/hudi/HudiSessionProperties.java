@@ -79,16 +79,6 @@ public class HudiSessionProperties
                         hudiConfig.getUseParquetColumnNames(),
                         false),
                 booleanProperty(
-                        PARQUET_OPTIMIZED_READER_ENABLED,
-                        "Use optimized Parquet reader",
-                        parquetReaderConfig.isOptimizedReaderEnabled(),
-                        false),
-                booleanProperty(
-                        PARQUET_OPTIMIZED_NESTED_READER_ENABLED,
-                        "Use optimized Parquet reader for nested columns",
-                        parquetReaderConfig.isOptimizedNestedReaderEnabled(),
-                        false),
-                booleanProperty(
                         SIZE_BASED_SPLIT_WEIGHTS_ENABLED,
                         format("If enabled, size-based splitting ensures that each batch of splits has enough data to process as defined by %s", STANDARD_SPLIT_WEIGHT_SIZE),
                         hudiConfig.isSizeBasedSplitWeightsEnabled(),

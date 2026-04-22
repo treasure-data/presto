@@ -224,7 +224,7 @@ public abstract class BaseIcebergMinioConnectorSmokeTest
         HiveMetastore metastore = new BridgingHiveMetastore(
                 testingThriftHiveMetastoreBuilder()
                         .metastoreClient(hiveMinioDataLake.getHiveHadoop().getHiveMetastoreEndpoint())
-                        .build());
+                        .build(this::closeAfterClass));
         metastore.dropTable(schemaName, tableName, false);
         assertThat(metastore.getTable(schemaName, tableName)).isEmpty();
     }
@@ -235,7 +235,7 @@ public abstract class BaseIcebergMinioConnectorSmokeTest
         HiveMetastore metastore = new BridgingHiveMetastore(
                 testingThriftHiveMetastoreBuilder()
                         .metastoreClient(hiveMinioDataLake.getHiveHadoop().getHiveMetastoreEndpoint())
-                        .build());
+                        .build(this::closeAfterClass));
         return metastore
                 .getTable(schemaName, tableName).orElseThrow()
                 .getParameters().get("metadata_location");

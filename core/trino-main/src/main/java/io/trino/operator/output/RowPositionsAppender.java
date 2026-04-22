@@ -27,13 +27,14 @@ import static io.airlift.slice.SizeOf.instanceSize;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static io.trino.operator.output.PositionsAppenderUtil.calculateBlockResetSize;
 import static io.trino.operator.output.PositionsAppenderUtil.calculateNewArraySize;
-import static io.trino.spi.block.RowBlock.fromFieldBlocks;
+import static io.trino.spi.block.RowBlock.fromNotNullSuppressedFieldBlocks;
 import static java.util.Objects.requireNonNull;
 
 public class RowPositionsAppender
         implements PositionsAppender
 {
     private static final int INSTANCE_SIZE = instanceSize(RowPositionsAppender.class);
+    private final RowType type;
     private final PositionsAppender[] fieldAppenders;
     private int initialEntryCount;
     private boolean initialized;
@@ -55,11 +56,12 @@ public class RowPositionsAppender
         for (int i = 0; i < fields.length; i++) {
             fields[i] = positionsAppenderFactory.create(type.getFields().get(i).getType(), expectedPositions, maxPageSizeInBytes);
         }
-        return new RowPositionsAppender(fields, expectedPositions);
+        return new RowPositionsAppender(type, fields, expectedPositions);
     }
 
-    private RowPositionsAppender(PositionsAppender[] fieldAppenders, int expectedPositions)
+    private RowPositionsAppender(RowType type, PositionsAppender[] fieldAppenders, int expectedPositions)
     {
+        this.type = type;
         this.fieldAppenders = requireNonNull(fieldAppenders, "fields is null");
         this.initialEntryCount = expectedPositions;
         resetSize();
@@ -88,7 +90,7 @@ public class RowPositionsAppender
 
             List<Block> fieldBlocks = sourceRowBlock.getChildren();
             for (int i = 0; i < fieldAppenders.length; i++) {
-                fieldAppenders[i].append(nonNullPositions, fieldBlocks.get(i));
+                fieldAppenders[i].append(positions, fieldBlocks.get(i));
             }
         }
         else if (allPositionsNull(positions, block)) {
@@ -96,6 +98,9 @@ public class RowPositionsAppender
             // append positions.size() nulls
             Arrays.fill(rowIsNull, positionCount, positionCount + positions.size(), true);
             hasNullRow = true;
+            for (int i = 0; i < fieldAppenders.length; i++) {
+                fieldAppenders[i].append(positions, block);
+            }
         }
         else {
             throw new IllegalArgumentException("unsupported block type: " + block);
@@ -113,6 +118,9 @@ public class RowPositionsAppender
             if (sourceRowBlock.isNull(0)) {
                 // append rlePositionCount nulls
                 Arrays.fill(rowIsNull, positionCount, positionCount + rlePositionCount, true);
+                for (int i = 0; i < fieldAppenders.length; i++) {
+                    fieldAppenders[i].appendRle(value.getSingleValueBlock(0), rlePositionCount);
+                }
                 hasNullRow = true;
             }
             else {
@@ -128,6 +136,9 @@ public class RowPositionsAppender
         else if (value.isNull(0)) {
             // append rlePositionCount nulls
             Arrays.fill(rowIsNull, positionCount, positionCount + rlePositionCount, true);
+            for (int i = 0; i < fieldAppenders.length; i++) {
+                fieldAppenders[i].appendRle(value.getSingleValueBlock(0), rlePositionCount);
+            }
             hasNullRow = true;
         }
         else {
@@ -145,6 +156,9 @@ public class RowPositionsAppender
             if (sourceRowBlock.isNull(position)) {
                 rowIsNull[positionCount] = true;
                 hasNullRow = true;
+                for (int i = 0; i < fieldAppenders.length; i++) {
+                    fieldAppenders[i].append(position, value);
+                }
             }
             else {
                 // append not null row value
@@ -159,6 +173,9 @@ public class RowPositionsAppender
         else if (value.isNull(position)) {
             rowIsNull[positionCount] = true;
             hasNullRow = true;
+            for (int i = 0; i < fieldAppenders.length; i++) {
+                fieldAppenders[i].append(position, value);
+            }
         }
         else {
             throw new IllegalArgumentException("unsupported block type: " + value);
@@ -176,10 +193,10 @@ public class RowPositionsAppender
         }
         Block result;
         if (hasNonNullRow) {
-            result = fromFieldBlocks(positionCount, hasNullRow ? Optional.of(rowIsNull) : Optional.empty(), fieldBlocks);
+            result = fromNotNullSuppressedFieldBlocks(positionCount, hasNullRow ? Optional.of(rowIsNull) : Optional.empty(), fieldBlocks);
         }
         else {
-            Block nullRowBlock = fromFieldBlocks(1, Optional.of(new boolean[] {true}), fieldBlocks);
+            Block nullRowBlock = type.createNullBlock();
             result = RunLengthEncodedBlock.create(nullRowBlock, positionCount);
         }
 

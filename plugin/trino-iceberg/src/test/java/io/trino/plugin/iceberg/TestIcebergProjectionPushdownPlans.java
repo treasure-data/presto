@@ -43,7 +43,6 @@ import java.util.Set;
 import static com.google.common.base.Predicates.equalTo;
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
-import static com.google.inject.util.Modules.EMPTY_MODULE;
 import static io.trino.plugin.hive.metastore.file.TestingFileHiveMetastore.createTestingFileHiveMetastore;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.any;
@@ -89,7 +88,7 @@ public class TestIcebergProjectionPushdownPlans
 
         queryRunner.createCatalog(
                 CATALOG,
-                new TestingIcebergConnectorFactory(Optional.of(new TestingIcebergFileMetastoreCatalogModule(metastore)), Optional.empty(), EMPTY_MODULE),
+                new TestingIcebergConnectorFactory(metastoreDir.toPath(), Optional.of(new TestingIcebergFileMetastoreCatalogModule(metastore))),
                 ImmutableMap.of());
 
         Database database = Database.builder()
@@ -159,12 +158,14 @@ public class TestIcebergProjectionPushdownPlans
                 column0Handle.getType(),
                 ImmutableList.of(column0Handle.getColumnIdentity().getChildren().get(0).getId()),
                 BIGINT,
+                false,
                 Optional.empty());
         IcebergColumnHandle columnY = new IcebergColumnHandle(
                 column0Handle.getColumnIdentity(),
                 column0Handle.getType(),
                 ImmutableList.of(column0Handle.getColumnIdentity().getChildren().get(1).getId()),
                 BIGINT,
+                false,
                 Optional.empty());
 
         // Simple Projection pushdown

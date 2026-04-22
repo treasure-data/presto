@@ -113,7 +113,7 @@ public class TestConnectorPushdownRulesWithHive
         metastore.createDatabase(database);
 
         LocalQueryRunner queryRunner = LocalQueryRunner.create(HIVE_SESSION);
-        queryRunner.createCatalog(TEST_CATALOG_NAME, new TestingHiveConnectorFactory(metastore), ImmutableMap.of());
+        queryRunner.createCatalog(TEST_CATALOG_NAME, new TestingHiveConnectorFactory(baseDir.toPath(), Optional.of(metastore)), ImmutableMap.of());
         catalogHandle = queryRunner.getCatalogHandle(TEST_CATALOG_NAME);
 
         return Optional.of(queryRunner);

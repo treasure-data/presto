@@ -70,6 +70,11 @@ public final class IcebergQueryRunner
         return new Builder();
     }
 
+    public static Builder builder(String schema)
+    {
+        return new Builder(schema);
+    }
+
     public static class Builder
             extends DistributedQueryRunner.Builder<Builder>
     {
@@ -82,6 +87,14 @@ public final class IcebergQueryRunner
             super(testSessionBuilder()
                     .setCatalog(ICEBERG_CATALOG)
                     .setSchema("tpch")
+                    .build());
+        }
+
+        protected Builder(String schema)
+        {
+            super(testSessionBuilder()
+                    .setCatalog(ICEBERG_CATALOG)
+                    .setSchema(schema)
                     .build());
         }
 
@@ -100,7 +113,9 @@ public final class IcebergQueryRunner
 
         public Builder addIcebergProperty(String key, String value)
         {
-            this.icebergProperties.put(key, value);
+            if (value != null) {
+                this.icebergProperties.put(key, value);
+            }
             return self();
         }
 
@@ -163,7 +178,7 @@ public final class IcebergQueryRunner
             File warehouseLocation = Files.newTemporaryFolder();
             warehouseLocation.deleteOnExit();
 
-            Catalog backend = backendCatalog(warehouseLocation);
+            Catalog backend = backendCatalog(warehouseLocation.toPath());
 
             DelegatingRestSessionCatalog delegatingCatalog = DelegatingRestSessionCatalog.builder()
                     .delegate(backend)

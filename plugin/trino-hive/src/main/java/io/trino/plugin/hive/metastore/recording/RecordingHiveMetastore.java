@@ -13,11 +13,11 @@
  */
 package io.trino.plugin.hive.metastore.recording;
 
-import io.trino.plugin.hive.HiveColumnStatisticType;
+import com.google.common.collect.ImmutableSet;
 import io.trino.plugin.hive.HiveType;
 import io.trino.plugin.hive.PartitionStatistics;
-import io.trino.plugin.hive.acid.AcidTransaction;
 import io.trino.plugin.hive.metastore.Database;
+import io.trino.plugin.hive.metastore.HiveColumnStatistics;
 import io.trino.plugin.hive.metastore.HiveMetastore;
 import io.trino.plugin.hive.metastore.HivePrincipal;
 import io.trino.plugin.hive.metastore.HivePrivilegeInfo;
@@ -25,24 +25,22 @@ import io.trino.plugin.hive.metastore.HivePrivilegeInfo.HivePrivilege;
 import io.trino.plugin.hive.metastore.Partition;
 import io.trino.plugin.hive.metastore.PartitionWithStatistics;
 import io.trino.plugin.hive.metastore.PrincipalPrivileges;
+import io.trino.plugin.hive.metastore.StatisticsUpdateMode;
 import io.trino.plugin.hive.metastore.Table;
-import io.trino.plugin.hive.metastore.TablesWithParameterCacheKey;
+import io.trino.plugin.hive.metastore.TableInfo;
 import io.trino.plugin.hive.metastore.UserTableKey;
-import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.security.RoleGrant;
-import io.trino.spi.type.Type;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
-import java.util.function.Function;
 
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.trino.plugin.hive.metastore.HivePartitionName.hivePartitionName;
 import static io.trino.plugin.hive.metastore.HiveTableName.hiveTableName;
-import static io.trino.plugin.hive.metastore.MetastoreUtil.makePartitionName;
 import static io.trino.plugin.hive.metastore.PartitionFilter.partitionFilter;
 import static java.util.Objects.requireNonNull;
 
@@ -77,83 +75,39 @@ public class RecordingHiveMetastore
     }
 
     @Override
-    public Set<HiveColumnStatisticType> getSupportedColumnStatistics(Type type)
+    public Map<String, HiveColumnStatistics> getTableColumnStatistics(String databaseName, String tableName, Set<String> columnNames)
     {
-        // No need to record that, since it's a pure local operation.
-        return delegate.getSupportedColumnStatistics(type);
+        return delegate.getTableColumnStatistics(databaseName, tableName, columnNames);
     }
 
     @Override
-    public PartitionStatistics getTableStatistics(Table table)
+    public Map<String, Map<String, HiveColumnStatistics>> getPartitionColumnStatistics(String databaseName, String tableName, Set<String> partitionNames, Set<String> columnNames)
     {
-        return recording.getTableStatistics(
-                hiveTableName(table.getDatabaseName(), table.getTableName()),
-                () -> delegate.getTableStatistics(table));
+        return delegate.getPartitionColumnStatistics(databaseName, tableName, partitionNames, columnNames);
     }
 
     @Override
-    public Map<String, PartitionStatistics> getPartitionStatistics(Table table, List<Partition> partitions)
+    public void updateTableStatistics(String databaseName, String tableName, OptionalLong acidWriteId, StatisticsUpdateMode mode, PartitionStatistics statisticsUpdate)
     {
-        return recording.getPartitionStatistics(
-                partitions.stream()
-                        .map(partition -> hivePartitionName(hiveTableName(table.getDatabaseName(), table.getTableName()), makePartitionName(table, partition)))
-                        .collect(toImmutableSet()),
-                () -> delegate.getPartitionStatistics(table, partitions));
+        delegate.updateTableStatistics(databaseName, tableName, acidWriteId, mode, statisticsUpdate);
     }
 
     @Override
-    public void updateTableStatistics(String databaseName,
-            String tableName,
-            AcidTransaction transaction,
-            Function<PartitionStatistics, PartitionStatistics> update)
+    public void updatePartitionStatistics(Table table, StatisticsUpdateMode mode, Map<String, PartitionStatistics> partitionUpdates)
     {
-        verifyRecordingMode();
-        delegate.updateTableStatistics(databaseName, tableName, transaction, update);
+        delegate.updatePartitionStatistics(table, mode, partitionUpdates);
     }
 
     @Override
-    public void updatePartitionStatistics(Table table, String partitionName, Function<PartitionStatistics, PartitionStatistics> update)
+    public List<TableInfo> getTables(String databaseName)
     {
-        verifyRecordingMode();
-        delegate.updatePartitionStatistics(table, partitionName, update);
+        return recording.getAllTables(databaseName, () -> delegate.getTables(databaseName));
     }
 
     @Override
-    public void updatePartitionStatistics(Table table, Map<String, Function<PartitionStatistics, PartitionStatistics>> updates)
+    public List<String> getTableNamesWithParameters(String databaseName, String parameterKey, ImmutableSet<String> parameterValues)
     {
-        verifyRecordingMode();
-        delegate.updatePartitionStatistics(table, updates);
-    }
-
-    @Override
-    public List<String> getAllTables(String databaseName)
-    {
-        return recording.getAllTables(databaseName, () -> delegate.getAllTables(databaseName));
-    }
-
-    @Override
-    public List<String> getTablesWithParameter(String databaseName, String parameterKey, String parameterValue)
-    {
-        TablesWithParameterCacheKey key = new TablesWithParameterCacheKey(databaseName, parameterKey, parameterValue);
-        return recording.getTablesWithParameter(key, () -> delegate.getTablesWithParameter(databaseName, parameterKey, parameterValue));
-    }
-
-    @Override
-    public List<String> getAllViews(String databaseName)
-    {
-        return recording.getAllViews(databaseName, () -> delegate.getAllViews(databaseName));
-    }
-
-    @Override
-    public Optional<List<SchemaTableName>> getAllTables()
-    {
-        return recording.getAllTables(delegate::getAllTables);
-    }
-
-    @Override
-    public Optional<List<SchemaTableName>> getAllViews()
-    {
-        return recording.getAllViews(delegate::getAllViews);
+        return delegate.getTableNamesWithParameters(databaseName, parameterKey, parameterValues);
     }
 
     @Override
@@ -199,10 +153,10 @@ public class RecordingHiveMetastore
     }
 
     @Override
-    public void replaceTable(String databaseName, String tableName, Table newTable, PrincipalPrivileges principalPrivileges)
+    public void replaceTable(String databaseName, String tableName, Table newTable, PrincipalPrivileges principalPrivileges, Map<String, String> environmentContext)
     {
         verifyRecordingMode();
-        delegate.replaceTable(databaseName, tableName, newTable, principalPrivileges);
+        delegate.replaceTable(databaseName, tableName, newTable, principalPrivileges, environmentContext);
     }
 
     @Override
@@ -355,14 +309,6 @@ public class RecordingHiveMetastore
     {
         verifyRecordingMode();
         delegate.revokeRoles(roles, grantees, adminOption, grantor);
-    }
-
-    @Override
-    public Set<RoleGrant> listGrantedPrincipals(String role)
-    {
-        return recording.listGrantedPrincipals(
-                role,
-                () -> delegate.listGrantedPrincipals(role));
     }
 
     @Override

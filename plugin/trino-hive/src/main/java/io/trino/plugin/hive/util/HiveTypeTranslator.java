@@ -17,6 +17,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Streams;
 import io.trino.plugin.hive.HiveErrorCode;
 import io.trino.plugin.hive.HiveTimestampPrecision;
+import io.trino.plugin.hive.HiveType;
 import io.trino.plugin.hive.type.CharTypeInfo;
 import io.trino.plugin.hive.type.DecimalTypeInfo;
 import io.trino.plugin.hive.type.ListTypeInfo;
@@ -90,6 +91,11 @@ import static java.util.Objects.requireNonNull;
 public final class HiveTypeTranslator
 {
     private HiveTypeTranslator() {}
+
+    public static HiveType toHiveType(Type type)
+    {
+        return HiveType.fromTypeInfo(toTypeInfo(type));
+    }
 
     public static TypeInfo toTypeInfo(Type type)
     {

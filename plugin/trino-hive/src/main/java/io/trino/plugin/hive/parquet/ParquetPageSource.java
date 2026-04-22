@@ -14,12 +14,15 @@
 package io.trino.plugin.hive.parquet;
 
 import com.google.common.collect.ImmutableList;
+import io.trino.parquet.Column;
 import io.trino.parquet.ParquetCorruptionException;
 import io.trino.parquet.ParquetDataSourceId;
 import io.trino.parquet.reader.ParquetReader;
+import io.trino.plugin.hive.coercions.TypeCoercer;
 import io.trino.spi.Page;
 import io.trino.spi.TrinoException;
 import io.trino.spi.block.Block;
+import io.trino.spi.block.LazyBlock;
 import io.trino.spi.block.LongArrayBlock;
 import io.trino.spi.block.RunLengthEncodedBlock;
 import io.trino.spi.connector.ConnectorPageSource;
@@ -32,6 +35,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
 
+import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.trino.plugin.base.util.Closables.closeAllSuppress;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_BAD_DATA;
@@ -43,19 +47,18 @@ public class ParquetPageSource
         implements ConnectorPageSource
 {
     private final ParquetReader parquetReader;
-    private final List<ColumnAdaptation> columnAdaptations;
-    private final boolean isColumnAdaptationRequired;
 
     private boolean closed;
     private long completedPositions;
 
-    private ParquetPageSource(
-            ParquetReader parquetReader,
-            List<ColumnAdaptation> columnAdaptations)
+    public ParquetPageSource(ParquetReader parquetReader)
     {
         this.parquetReader = requireNonNull(parquetReader, "parquetReader is null");
-        this.columnAdaptations = ImmutableList.copyOf(requireNonNull(columnAdaptations, "columnAdaptations is null"));
-        this.isColumnAdaptationRequired = isColumnAdaptationRequired(columnAdaptations);
+    }
+
+    public List<Column> getColumnFields()
+    {
+        return parquetReader.getColumnFields();
     }
 
     @Override
@@ -93,7 +96,7 @@ public class ParquetPageSource
     {
         Page page;
         try {
-            page = getColumnAdaptationsPage(parquetReader.nextPage());
+            page = parquetReader.nextPage();
         }
         catch (IOException | RuntimeException e) {
             closeAllSuppress(e, this);
@@ -166,27 +169,16 @@ public class ParquetPageSource
             return this;
         }
 
+        public Builder addCoercedColumn(int sourceChannel, TypeCoercer<?, ?> typeCoercer)
+        {
+            columns.add(new CoercedColumn(new SourceColumn(sourceChannel), typeCoercer));
+            return this;
+        }
+
         public ConnectorPageSource build(ParquetReader parquetReader)
         {
-            return new ParquetPageSource(parquetReader, this.columns.build());
+            return new ParquetPageSource(parquetReader);
         }
-    }
-
-    private Page getColumnAdaptationsPage(Page page)
-    {
-        if (!isColumnAdaptationRequired) {
-            return page;
-        }
-        if (page == null) {
-            return null;
-        }
-        int batchSize = page.getPositionCount();
-        Block[] blocks = new Block[columnAdaptations.size()];
-        long startRowId = parquetReader.lastBatchStartRow();
-        for (int columnChannel = 0; columnChannel < columnAdaptations.size(); columnChannel++) {
-            blocks[columnChannel] = columnAdaptations.get(columnChannel).getBlock(page, startRowId);
-        }
-        return new Page(batchSize, blocks);
     }
 
     static TrinoException handleException(ParquetDataSourceId dataSourceId, Exception exception)
@@ -230,9 +222,7 @@ public class ParquetPageSource
 
         private NullColumn(Type type)
         {
-            this.nullBlock = type.createBlockBuilder(null, 1, 0)
-                    .appendNull()
-                    .build();
+            this.nullBlock = type.createNullBlock();
         }
 
         @Override
@@ -290,6 +280,36 @@ public class ParquetPageSource
         public Block getBlock(Page sourcePage, long startRowId)
         {
             return createRowNumberBlock(startRowId, sourcePage.getPositionCount());
+        }
+    }
+
+    private static class CoercedColumn
+            implements ParquetPageSource.ColumnAdaptation
+    {
+        private final ParquetPageSource.SourceColumn sourceColumn;
+        private final TypeCoercer<?, ?> typeCoercer;
+
+        public CoercedColumn(ParquetPageSource.SourceColumn sourceColumn, TypeCoercer<?, ?> typeCoercer)
+        {
+            this.sourceColumn = requireNonNull(sourceColumn, "sourceColumn is null");
+            this.typeCoercer = requireNonNull(typeCoercer, "typeCoercer is null");
+        }
+
+        @Override
+        public Block getBlock(Page sourcePage, long startRowId)
+        {
+            Block block = sourceColumn.getBlock(sourcePage, startRowId);
+            return new LazyBlock(block.getPositionCount(), () -> typeCoercer.apply(block.getLoadedBlock()));
+        }
+
+        @Override
+        public String toString()
+        {
+            return toStringHelper(this)
+                    .add("sourceColumn", sourceColumn)
+                    .add("fromType", typeCoercer.getFromType())
+                    .add("toType", typeCoercer.getToType())
+                    .toString();
         }
     }
 

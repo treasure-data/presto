@@ -78,7 +78,7 @@ public final class InternalHudiConnectorFactory
                     new HdfsAuthenticationModule(),
                     fileSystemFactory
                             .map(factory -> (Module) binder -> binder.bind(TrinoFileSystemFactory.class).toInstance(factory))
-                            .orElseGet(FileSystemModule::new),
+                            .orElseGet(() -> new FileSystemModule(catalogName, context.getNodeManager(), context.getOpenTelemetry(), false)),
                     new MBeanServerModule(),
                     binder -> {
                         binder.bind(OpenTelemetry.class).toInstance(context.getOpenTelemetry());

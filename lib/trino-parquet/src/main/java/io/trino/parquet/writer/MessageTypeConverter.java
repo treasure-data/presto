@@ -88,7 +88,7 @@ class MessageTypeConverter
                     element.setConverted_type(getConvertedType(groupType.getOriginalType()));
                 }
                 if (groupType.getLogicalTypeAnnotation() != null) {
-                    element.setLogicalType(convertToLogicalType(new ParquetMetadataConverter(), groupType.getLogicalTypeAnnotation()));
+                    element.setLogicalType(io.trino.parquet.ParquetMetadataConverter.convertToLogicalType(groupType.getLogicalTypeAnnotation()));
                 }
                 if (groupType.getId() != null) {
                     element.setField_id(groupType.getId().intValue());

@@ -26,6 +26,7 @@ import io.trino.plugin.hive.metastore.SortingColumn;
 import io.trino.plugin.hive.metastore.Storage;
 import io.trino.plugin.hive.metastore.StorageFormat;
 import io.trino.plugin.hive.metastore.Table;
+import io.trino.testing.QueryRunner;
 import org.testng.annotations.Test;
 
 import java.io.IOException;
@@ -35,8 +36,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 
-import static io.airlift.units.DataSize.Unit.MEGABYTE;
-import static io.trino.plugin.hive.util.HiveBucketing.BucketingVersion.BUCKETING_V1;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -44,8 +43,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 // some tests may invalidate the whole cache affecting therefore other concurrent tests
 @Test(singleThreaded = true)
 public class TestTransactionScopeCachingDirectoryLister
-        extends BaseCachingDirectoryListerTest<TransactionScopeCachingDirectoryLister>
+        extends BaseCachingDirectoryListerTest
 {
+    @Override
+    protected QueryRunner createQueryRunner()
+            throws Exception
+    {
+        return createQueryRunner(ImmutableMap.<String, String>builder()
+                .put("hive.allow-register-partition-procedure", "true")
+                .put("hive.recursive-directories", "true")
+                .put("hive.file-status-cache-expire-time", "5m")
+                .put("hive.file-status-cache.max-retained-size", "1MB")
+                .put("hive.file-status-cache-tables", "tpch.*")
+                .buildOrThrow());
+    }
+
     private static final Column TABLE_COLUMN = new Column(
             "column",
             HiveType.HIVE_INT,
@@ -53,7 +65,7 @@ public class TestTransactionScopeCachingDirectoryLister
     private static final Storage TABLE_STORAGE = new Storage(
             StorageFormat.create("serde", "input", "output"),
             Optional.of("location"),
-            Optional.of(new HiveBucketProperty(ImmutableList.of("column"), BUCKETING_V1, 10, ImmutableList.of(new SortingColumn("column", SortingColumn.Order.ASCENDING)))),
+            Optional.of(new HiveBucketProperty(ImmutableList.of("column"), 10, ImmutableList.of(new SortingColumn("column", SortingColumn.Order.ASCENDING)))),
             true,
             ImmutableMap.of("param", "value2"));
     private static final Table TABLE = new Table(
@@ -68,18 +80,6 @@ public class TestTransactionScopeCachingDirectoryLister
             Optional.of("original_text"),
             Optional.of("expanded_text"),
             OptionalLong.empty());
-
-    @Override
-    protected TransactionScopeCachingDirectoryLister createDirectoryLister()
-    {
-        return (TransactionScopeCachingDirectoryLister) new TransactionScopeCachingDirectoryListerFactory(DataSize.of(1, MEGABYTE), Optional.empty()).get(new FileSystemDirectoryLister());
-    }
-
-    @Override
-    protected boolean isCached(TransactionScopeCachingDirectoryLister directoryLister, Location location)
-    {
-        return directoryLister.isCached(location);
-    }
 
     @Test
     public void testConcurrentDirectoryListing()

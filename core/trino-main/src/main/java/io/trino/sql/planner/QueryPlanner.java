@@ -557,6 +557,8 @@ class QueryPlanner
         List<Symbol> columnSymbols = columnSymbolsBuilder.build();
         Symbol operationSymbol = symbolAllocator.newSymbol("operation", TINYINT);
         assignmentsBuilder.put(operationSymbol, new GenericLiteral("TINYINT", String.valueOf(DELETE_OPERATION_NUMBER)));
+        Symbol caseNumberSymbol = symbolAllocator.newSymbol("case_number", INTEGER);
+        assignmentsBuilder.put(caseNumberSymbol, new GenericLiteral("INTEGER", String.valueOf(0)));
         Symbol projectedRowIdSymbol = symbolAllocator.newSymbol(rowIdSymbol.getName(), rowIdType);
         assignmentsBuilder.put(projectedRowIdSymbol, rowIdSymbol.toSymbolReference());
         assignmentsBuilder.put(symbolAllocator.newSymbol("insert_from_update", TINYINT), new GenericLiteral("TINYINT", "0"));
@@ -930,11 +932,13 @@ class QueryPlanner
         }
 
         Symbol operationSymbol = symbolAllocator.newSymbol("operation", TINYINT);
+        Symbol caseNumberSymbol = symbolAllocator.newSymbol("case_number", INTEGER);
         Symbol insertFromUpdateSymbol = symbolAllocator.newSymbol("insert_from_update", TINYINT);
 
         List<Symbol> projectedSymbols = ImmutableList.<Symbol>builder()
                 .addAll(columnSymbols)
                 .add(operationSymbol)
+                .add(caseNumberSymbol)
                 .add(rowIdSymbol)
                 .add(insertFromUpdateSymbol)
                 .build();

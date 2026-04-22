@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -173,6 +174,34 @@ public class TrackingFileSystemFactory
         {
             return delegate.directoryExists(location);
         }
+
+        @Override
+        public void createDirectory(Location location)
+                throws IOException
+        {
+            delegate.createDirectory(location);
+        }
+
+        @Override
+        public void renameDirectory(Location source, Location target)
+                throws IOException
+        {
+            delegate.renameDirectory(source, target);
+        }
+
+        @Override
+        public Set<Location> listDirectories(Location location)
+                throws IOException
+        {
+            return delegate.listDirectories(location);
+        }
+
+        @Override
+        public Optional<Location> createTemporaryDirectory(Location targetPath, String temporaryPrefix, String relativePrefix)
+                throws IOException
+        {
+            return delegate.createTemporaryDirectory(targetPath, temporaryPrefix, relativePrefix);
+        }
     }
 
     private static class TrackingInputFile
@@ -258,6 +287,14 @@ public class TrackingFileSystemFactory
         {
             this.delegate = requireNonNull(delegate, "delete is null");
             this.tracker = requireNonNull(tracker, "tracker is null");
+        }
+
+        @Override
+        public void createOrOverwrite(byte[] data)
+                throws IOException
+        {
+            tracker.accept(OUTPUT_FILE_CREATE_OR_OVERWRITE);
+            delegate.createOrOverwrite(data);
         }
 
         @Override

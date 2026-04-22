@@ -24,6 +24,9 @@ import java.util.OptionalInt;
 import java.util.function.ObjLongConsumer;
 
 import static io.airlift.slice.SizeOf.instanceSize;
+import static io.trino.spi.PageBlockUtil.getUnderlyingValueBlock;
+import static io.trino.spi.PageBlockUtil.getUnderlyingValuePosition;
+import static io.trino.spi.PageBlockUtil.isValueBlock;
 import static io.trino.spi.block.BlockUtil.checkArrayRange;
 import static io.trino.spi.block.BlockUtil.checkReadablePosition;
 import static io.trino.spi.block.BlockUtil.checkValidPosition;
@@ -58,6 +61,21 @@ public class RunLengthEncodedBlock
         }
         if (positionCount == 1) {
             return value;
+        }
+        if (isValueBlock(value)) {
+            return new RunLengthEncodedBlock(value, positionCount);
+        }
+
+        // if the value is lazy be careful to not materialize it
+        if (value instanceof LazyBlock lazyBlock) {
+            return new LazyBlock(positionCount, () -> create(lazyBlock.getBlock(), positionCount));
+        }
+
+        // unwrap the value
+        Block valueBlock = getUnderlyingValueBlock(value);
+        int valuePosition = getUnderlyingValuePosition(valueBlock, 0);
+        if (valueBlock.getPositionCount() == 1 && valuePosition == 0) {
+            return new RunLengthEncodedBlock(valueBlock, positionCount);
         }
         return new RunLengthEncodedBlock(value, positionCount);
     }

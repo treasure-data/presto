@@ -13,31 +13,41 @@
  */
 package io.trino.plugin.hive;
 
+import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.trino.filesystem.Location;
-import io.trino.plugin.hive.metastore.StorageFormat;
+import io.trino.filesystem.TrinoFileSystem;
+import io.trino.filesystem.TrinoFileSystemFactory;
+import io.trino.hadoop.ConfigurationInstantiator;
+import io.trino.plugin.base.type.DecodedTimestamp;
+import io.trino.plugin.hive.util.HiveTypeTranslator;
 import io.trino.spi.Page;
 import io.trino.spi.PageBuilder;
-import io.trino.spi.block.Block;
+import io.trino.spi.block.ArrayBlockBuilder;
 import io.trino.spi.block.BlockBuilder;
+import io.trino.spi.block.MapBlockBuilder;
+import io.trino.spi.block.RowBlockBuilder;
 import io.trino.spi.connector.ConnectorPageSource;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.RecordCursor;
+import io.trino.spi.security.ConnectorIdentity;
 import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.CharType;
 import io.trino.spi.type.DateType;
 import io.trino.spi.type.DecimalType;
 import io.trino.spi.type.Int128;
+import io.trino.spi.type.Int128Math;
+import io.trino.spi.type.MapType;
 import io.trino.spi.type.RowType;
 import io.trino.spi.type.SqlDate;
-import io.trino.spi.type.SqlDecimal;
 import io.trino.spi.type.SqlTimestamp;
 import io.trino.spi.type.SqlVarbinary;
 import io.trino.spi.type.TimestampType;
 import io.trino.spi.type.Type;
+import io.trino.spi.type.TypeOperators;
 import io.trino.spi.type.VarcharType;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.MaterializedRow;
@@ -47,19 +57,20 @@ import org.apache.hadoop.hive.common.type.HiveChar;
 import org.apache.hadoop.hive.common.type.HiveDecimal;
 import org.apache.hadoop.hive.common.type.HiveVarchar;
 import org.apache.hadoop.hive.common.type.Timestamp;
-import org.apache.hadoop.hive.ql.exec.FileSinkOperator.RecordWriter;
+import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
 import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
 import org.apache.hadoop.hive.serde2.Serializer;
+import org.apache.hadoop.hive.serde2.io.HiveDecimalWritable;
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
-import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Category;
 import org.apache.hadoop.hive.serde2.objectinspector.SettableStructObjectInspector;
 import org.apache.hadoop.hive.serde2.objectinspector.StructField;
 import org.apache.hadoop.hive.serde2.objectinspector.primitive.JavaHiveCharObjectInspector;
 import org.apache.hadoop.hive.serde2.objectinspector.primitive.JavaHiveDecimalObjectInspector;
+import org.apache.hadoop.hive.serde2.typeinfo.CharTypeInfo;
 import org.apache.hadoop.hive.serde2.typeinfo.DecimalTypeInfo;
+import org.apache.hadoop.hive.serde2.typeinfo.VarcharTypeInfo;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
-import org.apache.hadoop.mapred.FileSplit;
 import org.apache.hadoop.mapred.JobConf;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
@@ -67,7 +78,7 @@ import org.joda.time.format.DateTimeFormat;
 
 import java.io.File;
 import java.io.IOException;
-import java.lang.invoke.MethodHandle;
+import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -82,31 +93,39 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static com.google.common.collect.ImmutableMap.toImmutableMap;
-import static io.trino.hadoop.ConfigurationInstantiator.newEmptyConfiguration;
+import static io.airlift.slice.Slices.utf8Slice;
+import static io.trino.plugin.base.type.TrinoTimestampEncoderFactory.createTimestampEncoder;
 import static io.trino.plugin.hive.HiveColumnHandle.ColumnType.PARTITION_KEY;
 import static io.trino.plugin.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static io.trino.plugin.hive.HiveColumnHandle.createBaseColumn;
-import static io.trino.plugin.hive.HiveColumnProjectionInfo.generatePartialName;
 import static io.trino.plugin.hive.HivePartitionKey.HIVE_DEFAULT_DYNAMIC_PARTITION;
 import static io.trino.plugin.hive.HiveTestUtils.SESSION;
-import static io.trino.plugin.hive.HiveTestUtils.isDistinctFrom;
 import static io.trino.plugin.hive.HiveTestUtils.mapType;
 import static io.trino.plugin.hive.acid.AcidTransaction.NO_ACID_TRANSACTION;
 import static io.trino.plugin.hive.util.CompressionConfigUtil.configureCompression;
+import static io.trino.plugin.hive.util.HiveTypeTranslator.toHiveType;
 import static io.trino.plugin.hive.util.HiveUtil.isStructuralType;
-import static io.trino.plugin.hive.util.SerDeUtils.serializeObject;
+import static io.trino.plugin.hive.util.SerdeConstants.LIST_COLUMNS;
+import static io.trino.plugin.hive.util.SerdeConstants.LIST_COLUMN_TYPES;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.CharType.createCharType;
 import static io.trino.spi.type.Chars.padSpaces;
+import static io.trino.spi.type.Chars.truncateToLengthAndTrimSpaces;
+import static io.trino.spi.type.DateType.DATE;
 import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.RealType.REAL;
+import static io.trino.spi.type.RowType.field;
+import static io.trino.spi.type.RowType.rowType;
 import static io.trino.spi.type.SmallintType.SMALLINT;
+import static io.trino.spi.type.TimestampType.TIMESTAMP_MILLIS;
+import static io.trino.spi.type.Timestamps.round;
 import static io.trino.spi.type.TinyintType.TINYINT;
 import static io.trino.spi.type.VarbinaryType.VARBINARY;
+import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.spi.type.VarcharType.createUnboundedVarcharType;
 import static io.trino.spi.type.VarcharType.createVarcharType;
 import static io.trino.testing.DateTimeTestingUtils.sqlTimestampOf;
@@ -120,31 +139,32 @@ import static io.trino.type.DateTimes.MICROSECONDS_PER_MILLISECOND;
 import static io.trino.type.InternalTypeManager.TESTING_TYPE_MANAGER;
 import static java.lang.Float.intBitsToFloat;
 import static java.lang.Math.floorDiv;
+import static java.lang.Math.toIntExact;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.nio.file.Files.readAllBytes;
 import static java.util.Arrays.fill;
 import static java.util.Objects.requireNonNull;
-import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.toList;
+import static org.apache.hadoop.hive.common.type.HiveVarchar.MAX_VARCHAR_LENGTH;
 import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorFactory.getStandardListObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorFactory.getStandardMapObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorFactory.getStandardStructObjectInspector;
+import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.getPrimitiveJavaObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaBooleanObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaByteArrayObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaByteObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaDateObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaDoubleObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaFloatObjectInspector;
-import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaHiveVarcharObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaIntObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaLongObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaShortObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaStringObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaTimestampObjectInspector;
 import static org.apache.hadoop.hive.serde2.typeinfo.TypeInfoFactory.getCharTypeInfo;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.data.Offset.offset;
 import static org.joda.time.DateTimeZone.UTC;
-import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertFalse;
-import static org.testng.Assert.assertTrue;
 
 public abstract class AbstractTestHiveFileFormats
 {
@@ -152,17 +172,43 @@ public abstract class AbstractTestHiveFileFormats
 
     private static final double EPSILON = 0.001;
 
+    private static final Type VARCHAR_100 = createVarcharType(100);
+    private static final Type VARCHAR_HIVE_MAX = createVarcharType(MAX_VARCHAR_LENGTH);
+    private static final Type CHAR_10 = createCharType(10);
+    private static final String VARCHAR_MAX_LENGTH_STRING;
+
     private static final long DATE_MILLIS_UTC = new DateTime(2011, 5, 6, 0, 0, UTC).getMillis();
     private static final long DATE_DAYS = TimeUnit.MILLISECONDS.toDays(DATE_MILLIS_UTC);
     private static final String DATE_STRING = DateTimeFormat.forPattern("yyyy-MM-dd").withZoneUTC().print(DATE_MILLIS_UTC);
     private static final Date HIVE_DATE = Date.ofEpochMilli(DATE_MILLIS_UTC);
 
-    private static final DateTime TIMESTAMP = new DateTime(2011, 5, 6, 7, 8, 9, 123, UTC);
-    private static final long TIMESTAMP_MICROS = TIMESTAMP.getMillis() * MICROSECONDS_PER_MILLISECOND;
-    private static final String TIMESTAMP_STRING = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss.SSS").withZoneUTC().print(TIMESTAMP.getMillis());
-    private static final Timestamp HIVE_TIMESTAMP = Timestamp.ofEpochMilli(TIMESTAMP.getMillis());
+    private static final DateTime TIMESTAMP_VALUE = new DateTime(2011, 5, 6, 7, 8, 9, 123, UTC);
+    private static final long TIMESTAMP_MICROS_VALUE = TIMESTAMP_VALUE.getMillis() * MICROSECONDS_PER_MILLISECOND;
+    private static final String TIMESTAMP_STRING_VALUE = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss.SSS").withZoneUTC().print(TIMESTAMP_VALUE.getMillis());
+    private static final Timestamp HIVE_TIMESTAMP = Timestamp.ofEpochMilli(TIMESTAMP_VALUE.getMillis());
 
-    private static final String VARCHAR_MAX_LENGTH_STRING;
+    private static final DecimalType DECIMAL_TYPE_2 = DecimalType.createDecimalType(2, 1);
+    private static final DecimalType DECIMAL_TYPE_4 = DecimalType.createDecimalType(4, 2);
+    private static final DecimalType DECIMAL_TYPE_8 = DecimalType.createDecimalType(8, 4);
+    private static final DecimalType DECIMAL_TYPE_17 = DecimalType.createDecimalType(17, 8);
+    private static final DecimalType DECIMAL_TYPE_18 = DecimalType.createDecimalType(18, 8);
+    private static final DecimalType DECIMAL_TYPE_38 = DecimalType.createDecimalType(38, 16);
+
+    private static final HiveDecimal WRITE_DECIMAL_2 = HiveDecimal.create(new BigDecimal("-1.2"));
+    private static final HiveDecimal WRITE_DECIMAL_4 = HiveDecimal.create(new BigDecimal("12.3"));
+    private static final HiveDecimal WRITE_DECIMAL_8 = HiveDecimal.create(new BigDecimal("-1234.5678"));
+    private static final HiveDecimal WRITE_DECIMAL_17 = HiveDecimal.create(new BigDecimal("123456789.1234"));
+    private static final HiveDecimal WRITE_DECIMAL_18 = HiveDecimal.create(new BigDecimal("-1234567890.12345678"));
+    private static final HiveDecimal WRITE_DECIMAL_38 = HiveDecimal.create(new BigDecimal("1234567890123456789012.12345678"));
+
+    private static final BigDecimal EXPECTED_DECIMAL_2 = new BigDecimal("-1.2");
+    private static final BigDecimal EXPECTED_DECIMAL_4 = new BigDecimal("12.30");
+    private static final BigDecimal EXPECTED_DECIMAL_8 = new BigDecimal("-1234.5678");
+    private static final BigDecimal EXPECTED_DECIMAL_17 = new BigDecimal("123456789.12340000");
+    private static final BigDecimal EXPECTED_DECIMAL_18 = new BigDecimal("-1234567890.12345678");
+    private static final BigDecimal EXPECTED_DECIMAL_38 = new BigDecimal("1234567890123456789012.1234567800000000");
+
+    private static final TypeOperators TYPE_OPERATORS = TESTING_TYPE_MANAGER.getTypeOperators();
 
     static {
         char[] varcharMaxLengthCharArray = new char[HiveVarchar.MAX_VARCHAR_LENGTH];
@@ -207,249 +253,248 @@ public abstract class AbstractTestHiveFileFormats
     private static final JavaHiveCharObjectInspector CHAR_INSPECTOR_LENGTH_10 =
             new JavaHiveCharObjectInspector(getCharTypeInfo(10));
 
-    // TODO: support null values and determine if timestamp and binary are allowed as partition keys
-    public static final List<TestColumn> TEST_COLUMNS = ImmutableList.<TestColumn>builder()
-            .add(new TestColumn("p_empty_string", javaStringObjectInspector, "", Slices.EMPTY_SLICE, true))
-            .add(new TestColumn("p_string", javaStringObjectInspector, "test", Slices.utf8Slice("test"), true))
-            .add(new TestColumn("p_empty_varchar", javaHiveVarcharObjectInspector, "", Slices.EMPTY_SLICE, true))
-            .add(new TestColumn("p_varchar", javaHiveVarcharObjectInspector, "test", Slices.utf8Slice("test"), true))
-            .add(new TestColumn("p_varchar_max_length", javaHiveVarcharObjectInspector, VARCHAR_MAX_LENGTH_STRING, Slices.utf8Slice(VARCHAR_MAX_LENGTH_STRING), true))
-            .add(new TestColumn("p_char_10", CHAR_INSPECTOR_LENGTH_10, "test", Slices.utf8Slice("test"), true))
-            .add(new TestColumn("p_tinyint", javaByteObjectInspector, "1", (byte) 1, true))
-            .add(new TestColumn("p_smallint", javaShortObjectInspector, "2", (short) 2, true))
-            .add(new TestColumn("p_int", javaIntObjectInspector, "3", 3, true))
-            .add(new TestColumn("p_bigint", javaLongObjectInspector, "4", 4L, true))
-            .add(new TestColumn("p_float", javaFloatObjectInspector, "5.1", 5.1f, true))
-            .add(new TestColumn("p_double", javaDoubleObjectInspector, "6.2", 6.2, true))
-            .add(new TestColumn("p_boolean", javaBooleanObjectInspector, "true", true, true))
-            .add(new TestColumn("p_date", javaDateObjectInspector, DATE_STRING, DATE_DAYS, true))
-            .add(new TestColumn("p_timestamp", javaTimestampObjectInspector, TIMESTAMP_STRING, TIMESTAMP_MICROS, true))
-            .add(new TestColumn("p_decimal_precision_2", DECIMAL_INSPECTOR_PRECISION_2, WRITE_DECIMAL_PRECISION_2.toString(), EXPECTED_DECIMAL_PRECISION_2, true))
-            .add(new TestColumn("p_decimal_precision_4", DECIMAL_INSPECTOR_PRECISION_4, WRITE_DECIMAL_PRECISION_4.toString(), EXPECTED_DECIMAL_PRECISION_4, true))
-            .add(new TestColumn("p_decimal_precision_8", DECIMAL_INSPECTOR_PRECISION_8, WRITE_DECIMAL_PRECISION_8.toString(), EXPECTED_DECIMAL_PRECISION_8, true))
-            .add(new TestColumn("p_decimal_precision_17", DECIMAL_INSPECTOR_PRECISION_17, WRITE_DECIMAL_PRECISION_17.toString(), EXPECTED_DECIMAL_PRECISION_17, true))
-            .add(new TestColumn("p_decimal_precision_18", DECIMAL_INSPECTOR_PRECISION_18, WRITE_DECIMAL_PRECISION_18.toString(), EXPECTED_DECIMAL_PRECISION_18, true))
-            .add(new TestColumn("p_decimal_precision_38", DECIMAL_INSPECTOR_PRECISION_38, WRITE_DECIMAL_PRECISION_38.toString() + "BD", EXPECTED_DECIMAL_PRECISION_38, true))
-//            .add(new TestColumn("p_binary", javaByteArrayObjectInspector, "test2", Slices.utf8Slice("test2"), true))
-            .add(new TestColumn("p_null_string", javaStringObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_varchar", javaHiveVarcharObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_char", CHAR_INSPECTOR_LENGTH_10, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_tinyint", javaByteObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_smallint", javaShortObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_int", javaIntObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_bigint", javaLongObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_float", javaFloatObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_double", javaDoubleObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_boolean", javaBooleanObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_date", javaDateObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_timestamp", javaTimestampObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_decimal_precision_2", DECIMAL_INSPECTOR_PRECISION_2, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_decimal_precision_4", DECIMAL_INSPECTOR_PRECISION_4, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_decimal_precision_8", DECIMAL_INSPECTOR_PRECISION_8, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_decimal_precision_17", DECIMAL_INSPECTOR_PRECISION_17, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_decimal_precision_18", DECIMAL_INSPECTOR_PRECISION_18, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("p_null_decimal_precision_38", DECIMAL_INSPECTOR_PRECISION_38, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+    protected static final List<TestColumn> TEST_COLUMNS = ImmutableList.<TestColumn>builder()
+            .add(new TestColumn("p_empty_string", VARCHAR, "", Slices.EMPTY_SLICE, true))
+            .add(new TestColumn("p_string", VARCHAR, "test", utf8Slice("test"), true))
+            .add(new TestColumn("p_empty_varchar", VARCHAR_100, "", Slices.EMPTY_SLICE, true))
+            .add(new TestColumn("p_varchar", VARCHAR_100, "test", utf8Slice("test"), true))
+            .add(new TestColumn("p_varchar_max_length", VARCHAR_HIVE_MAX, VARCHAR_MAX_LENGTH_STRING, utf8Slice(VARCHAR_MAX_LENGTH_STRING), true))
+            .add(new TestColumn("p_char_10", CHAR_10, "test", utf8Slice("test"), true))
+            .add(new TestColumn("p_tinyint", TINYINT, "1", (byte) 1, true))
+            .add(new TestColumn("p_smallint", SMALLINT, "2", (short) 2, true))
+            .add(new TestColumn("p_int", INTEGER, "3", 3, true))
+            .add(new TestColumn("p_bigint", BIGINT, "4", 4L, true))
+            .add(new TestColumn("p_float", REAL, "5.1", 5.1f, true))
+            .add(new TestColumn("p_double", DOUBLE, "6.2", 6.2, true))
+            .add(new TestColumn("p_boolean", BOOLEAN, "true", true, true))
+            .add(new TestColumn("p_date", DATE, DATE_STRING, DATE_DAYS, true))
+            .add(new TestColumn("p_timestamp", TIMESTAMP_MILLIS, TIMESTAMP_STRING_VALUE, TIMESTAMP_MICROS_VALUE, true))
+            .add(new TestColumn("p_decimal_2", DECIMAL_TYPE_2, WRITE_DECIMAL_2.toString(), EXPECTED_DECIMAL_2, true))
+            .add(new TestColumn("p_decimal_4", DECIMAL_TYPE_4, WRITE_DECIMAL_4.toString(), EXPECTED_DECIMAL_4, true))
+            .add(new TestColumn("p_decimal_8", DECIMAL_TYPE_8, WRITE_DECIMAL_8.toString(), EXPECTED_DECIMAL_8, true))
+            .add(new TestColumn("p_decimal_17", DECIMAL_TYPE_17, WRITE_DECIMAL_17.toString(), EXPECTED_DECIMAL_17, true))
+            .add(new TestColumn("p_decimal_18", DECIMAL_TYPE_18, WRITE_DECIMAL_18.toString(), EXPECTED_DECIMAL_18, true))
+            .add(new TestColumn("p_decimal_38", DECIMAL_TYPE_38, WRITE_DECIMAL_38.toString() + "BD", EXPECTED_DECIMAL_38, true))
+            .add(new TestColumn("p_null_string", VARCHAR, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_varchar", VARCHAR_100, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_char", CHAR_10, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_tinyint", TINYINT, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_smallint", SMALLINT, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_int", INTEGER, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_bigint", BIGINT, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_float", REAL, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_double", DOUBLE, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_boolean", BOOLEAN, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_date", DATE, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_timestamp", TIMESTAMP_MILLIS, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_decimal_2", DECIMAL_TYPE_2, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_decimal_4", DECIMAL_TYPE_4, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_decimal_8", DECIMAL_TYPE_8, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_decimal_17", DECIMAL_TYPE_17, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_decimal_18", DECIMAL_TYPE_18, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
+            .add(new TestColumn("p_null_decimal_38", DECIMAL_TYPE_38, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
 
-//            .add(new TestColumn("p_null_binary", javaByteArrayObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
-            .add(new TestColumn("t_null_string", javaStringObjectInspector, null, null))
-            .add(new TestColumn("t_null_varchar", javaHiveVarcharObjectInspector, null, null))
-            .add(new TestColumn("t_null_char", CHAR_INSPECTOR_LENGTH_10, null, null))
-            .add(new TestColumn("t_null_array_int", getStandardListObjectInspector(javaIntObjectInspector), null, null))
-            .add(new TestColumn("t_null_decimal_precision_2", DECIMAL_INSPECTOR_PRECISION_2, null, null))
-            .add(new TestColumn("t_null_decimal_precision_4", DECIMAL_INSPECTOR_PRECISION_4, null, null))
-            .add(new TestColumn("t_null_decimal_precision_8", DECIMAL_INSPECTOR_PRECISION_8, null, null))
-            .add(new TestColumn("t_null_decimal_precision_17", DECIMAL_INSPECTOR_PRECISION_17, null, null))
-            .add(new TestColumn("t_null_decimal_precision_18", DECIMAL_INSPECTOR_PRECISION_18, null, null))
-            .add(new TestColumn("t_null_decimal_precision_38", DECIMAL_INSPECTOR_PRECISION_38, null, null))
-            .add(new TestColumn("t_empty_string", javaStringObjectInspector, "", Slices.EMPTY_SLICE))
-            .add(new TestColumn("t_string", javaStringObjectInspector, "test", Slices.utf8Slice("test")))
-            .add(new TestColumn("t_empty_varchar", javaHiveVarcharObjectInspector, new HiveVarchar("", HiveVarchar.MAX_VARCHAR_LENGTH), Slices.EMPTY_SLICE))
-            .add(new TestColumn("t_varchar", javaHiveVarcharObjectInspector, new HiveVarchar("test", HiveVarchar.MAX_VARCHAR_LENGTH), Slices.utf8Slice("test")))
-            .add(new TestColumn("t_varchar_max_length", javaHiveVarcharObjectInspector, new HiveVarchar(VARCHAR_MAX_LENGTH_STRING, HiveVarchar.MAX_VARCHAR_LENGTH), Slices.utf8Slice(VARCHAR_MAX_LENGTH_STRING)))
-            .add(new TestColumn("t_char", CHAR_INSPECTOR_LENGTH_10, "test", Slices.utf8Slice("test")))
-            .add(new TestColumn("t_tinyint", javaByteObjectInspector, (byte) 1, (byte) 1))
-            .add(new TestColumn("t_smallint", javaShortObjectInspector, (short) 2, (short) 2))
-            .add(new TestColumn("t_int", javaIntObjectInspector, 3, 3))
-            .add(new TestColumn("t_bigint", javaLongObjectInspector, 4L, 4L))
-            .add(new TestColumn("t_float", javaFloatObjectInspector, 5.1f, 5.1f))
-            .add(new TestColumn("t_double", javaDoubleObjectInspector, 6.2, 6.2))
-            .add(new TestColumn("t_boolean_true", javaBooleanObjectInspector, true, true))
-            .add(new TestColumn("t_boolean_false", javaBooleanObjectInspector, false, false))
-            .add(new TestColumn("t_date", javaDateObjectInspector, HIVE_DATE, DATE_DAYS))
-            .add(new TestColumn("t_timestamp", javaTimestampObjectInspector, HIVE_TIMESTAMP, TIMESTAMP_MICROS))
-            .add(new TestColumn("t_decimal_precision_2", DECIMAL_INSPECTOR_PRECISION_2, WRITE_DECIMAL_PRECISION_2, EXPECTED_DECIMAL_PRECISION_2))
-            .add(new TestColumn("t_decimal_precision_4", DECIMAL_INSPECTOR_PRECISION_4, WRITE_DECIMAL_PRECISION_4, EXPECTED_DECIMAL_PRECISION_4))
-            .add(new TestColumn("t_decimal_precision_8", DECIMAL_INSPECTOR_PRECISION_8, WRITE_DECIMAL_PRECISION_8, EXPECTED_DECIMAL_PRECISION_8))
-            .add(new TestColumn("t_decimal_precision_17", DECIMAL_INSPECTOR_PRECISION_17, WRITE_DECIMAL_PRECISION_17, EXPECTED_DECIMAL_PRECISION_17))
-            .add(new TestColumn("t_decimal_precision_18", DECIMAL_INSPECTOR_PRECISION_18, WRITE_DECIMAL_PRECISION_18, EXPECTED_DECIMAL_PRECISION_18))
-            .add(new TestColumn("t_decimal_precision_38", DECIMAL_INSPECTOR_PRECISION_38, WRITE_DECIMAL_PRECISION_38, EXPECTED_DECIMAL_PRECISION_38))
-            .add(new TestColumn("t_binary", javaByteArrayObjectInspector, Slices.utf8Slice("test2").getBytes(), Slices.utf8Slice("test2")))
+            .add(new TestColumn("t_null_string", VARCHAR, null, null))
+            .add(new TestColumn("t_null_varchar", VARCHAR_100, null, null))
+            .add(new TestColumn("t_null_char", CHAR_10, null, null))
+            .add(new TestColumn("t_null_array_int", new ArrayType(INTEGER), null, null))
+            .add(new TestColumn("t_null_decimal_2", DECIMAL_TYPE_2, null, null))
+            .add(new TestColumn("t_null_decimal_4", DECIMAL_TYPE_4, null, null))
+            .add(new TestColumn("t_null_decimal_8", DECIMAL_TYPE_8, null, null))
+            .add(new TestColumn("t_null_decimal_17", DECIMAL_TYPE_17, null, null))
+            .add(new TestColumn("t_null_decimal_18", DECIMAL_TYPE_18, null, null))
+            .add(new TestColumn("t_null_decimal_38", DECIMAL_TYPE_38, null, null))
+            .add(new TestColumn("t_empty_string", VARCHAR, "", Slices.EMPTY_SLICE))
+            .add(new TestColumn("t_string", VARCHAR, "test", utf8Slice("test")))
+            .add(new TestColumn("t_empty_varchar", VARCHAR_HIVE_MAX, new HiveVarchar("", MAX_VARCHAR_LENGTH), Slices.EMPTY_SLICE))
+            .add(new TestColumn("t_varchar", VARCHAR_HIVE_MAX, new HiveVarchar("test", MAX_VARCHAR_LENGTH), utf8Slice("test")))
+            .add(new TestColumn("t_varchar_max_length", VARCHAR_HIVE_MAX, new HiveVarchar(VARCHAR_MAX_LENGTH_STRING, MAX_VARCHAR_LENGTH), utf8Slice(VARCHAR_MAX_LENGTH_STRING)))
+            .add(new TestColumn("t_char", CHAR_10, "test", utf8Slice("test")))
+            .add(new TestColumn("t_tinyint", TINYINT, (byte) 1, (byte) 1))
+            .add(new TestColumn("t_smallint", SMALLINT, (short) 2, (short) 2))
+            .add(new TestColumn("t_int", INTEGER, 3, 3))
+            .add(new TestColumn("t_bigint", BIGINT, 4L, 4L))
+            .add(new TestColumn("t_float", REAL, 5.1f, 5.1f))
+            .add(new TestColumn("t_double", DOUBLE, 6.2, 6.2))
+            .add(new TestColumn("t_boolean_true", BOOLEAN, true, true))
+            .add(new TestColumn("t_boolean_false", BOOLEAN, false, false))
+            .add(new TestColumn("t_date", DATE, HIVE_DATE, DATE_DAYS))
+            .add(new TestColumn("t_timestamp", TIMESTAMP_MILLIS, HIVE_TIMESTAMP, TIMESTAMP_MICROS_VALUE))
+            .add(new TestColumn("t_decimal_2", DECIMAL_TYPE_2, WRITE_DECIMAL_2, EXPECTED_DECIMAL_2))
+            .add(new TestColumn("t_decimal_4", DECIMAL_TYPE_4, WRITE_DECIMAL_4, EXPECTED_DECIMAL_4))
+            .add(new TestColumn("t_decimal_8", DECIMAL_TYPE_8, WRITE_DECIMAL_8, EXPECTED_DECIMAL_8))
+            .add(new TestColumn("t_decimal_17", DECIMAL_TYPE_17, WRITE_DECIMAL_17, EXPECTED_DECIMAL_17))
+            .add(new TestColumn("t_decimal_18", DECIMAL_TYPE_18, WRITE_DECIMAL_18, EXPECTED_DECIMAL_18))
+            .add(new TestColumn("t_decimal_38", DECIMAL_TYPE_38, WRITE_DECIMAL_38, EXPECTED_DECIMAL_38))
+            .add(new TestColumn("t_binary", VARBINARY, utf8Slice("test2").getBytes(), utf8Slice("test2")))
             .add(new TestColumn("t_map_string",
-                    getStandardMapObjectInspector(javaStringObjectInspector, javaStringObjectInspector),
+                    new MapType(VARCHAR, VARCHAR, TYPE_OPERATORS),
                     ImmutableMap.of("test", "test"),
                     mapBlockOf(createUnboundedVarcharType(), createUnboundedVarcharType(), "test", "test")))
             .add(new TestColumn("t_map_tinyint",
-                    getStandardMapObjectInspector(javaByteObjectInspector, javaByteObjectInspector),
+                    new MapType(TINYINT, TINYINT, TYPE_OPERATORS),
                     ImmutableMap.of((byte) 1, (byte) 1),
                     mapBlockOf(TINYINT, TINYINT, (byte) 1, (byte) 1)))
             .add(new TestColumn("t_map_varchar",
-                    getStandardMapObjectInspector(javaHiveVarcharObjectInspector, javaHiveVarcharObjectInspector),
-                    ImmutableMap.of(new HiveVarchar("test", HiveVarchar.MAX_VARCHAR_LENGTH), new HiveVarchar("test", HiveVarchar.MAX_VARCHAR_LENGTH)),
-                    mapBlockOf(createVarcharType(HiveVarchar.MAX_VARCHAR_LENGTH), createVarcharType(HiveVarchar.MAX_VARCHAR_LENGTH), "test", "test")))
+                    new MapType(VARCHAR_HIVE_MAX, VARCHAR_HIVE_MAX, TYPE_OPERATORS),
+                    ImmutableMap.of(new HiveVarchar("test", MAX_VARCHAR_LENGTH), new HiveVarchar("test", MAX_VARCHAR_LENGTH)),
+                    mapBlockOf(createVarcharType(MAX_VARCHAR_LENGTH), createVarcharType(MAX_VARCHAR_LENGTH), "test", "test")))
             .add(new TestColumn("t_map_char",
-                    getStandardMapObjectInspector(CHAR_INSPECTOR_LENGTH_10, CHAR_INSPECTOR_LENGTH_10),
+                    new MapType(CHAR_10, CHAR_10, TYPE_OPERATORS),
                     ImmutableMap.of(new HiveChar("test", 10), new HiveChar("test", 10)),
                     mapBlockOf(createCharType(10), createCharType(10), "test", "test")))
             .add(new TestColumn("t_map_smallint",
-                    getStandardMapObjectInspector(javaShortObjectInspector, javaShortObjectInspector),
+                    new MapType(SMALLINT, SMALLINT, TYPE_OPERATORS),
                     ImmutableMap.of((short) 2, (short) 2),
                     mapBlockOf(SMALLINT, SMALLINT, (short) 2, (short) 2)))
             .add(new TestColumn("t_map_null_key",
-                    getStandardMapObjectInspector(javaLongObjectInspector, javaLongObjectInspector),
+                    new MapType(BIGINT, BIGINT, TYPE_OPERATORS),
                     asMap(new Long[] {null, 2L}, new Long[] {0L, 3L}),
                     mapBlockOf(BIGINT, BIGINT, 2, 3)))
             .add(new TestColumn("t_map_int",
-                    getStandardMapObjectInspector(javaIntObjectInspector, javaIntObjectInspector),
+                    new MapType(INTEGER, INTEGER, TYPE_OPERATORS),
                     ImmutableMap.of(3, 3),
                     mapBlockOf(INTEGER, INTEGER, 3, 3)))
             .add(new TestColumn("t_map_bigint",
-                    getStandardMapObjectInspector(javaLongObjectInspector, javaLongObjectInspector),
+                    new MapType(BIGINT, BIGINT, TYPE_OPERATORS),
                     ImmutableMap.of(4L, 4L),
                     mapBlockOf(BIGINT, BIGINT, 4L, 4L)))
             .add(new TestColumn("t_map_float",
-                    getStandardMapObjectInspector(javaFloatObjectInspector, javaFloatObjectInspector),
+                    new MapType(REAL, REAL, TYPE_OPERATORS),
                     ImmutableMap.of(5.0f, 5.0f), mapBlockOf(REAL, REAL, 5.0f, 5.0f)))
             .add(new TestColumn("t_map_double",
-                    getStandardMapObjectInspector(javaDoubleObjectInspector, javaDoubleObjectInspector),
+                    new MapType(DOUBLE, DOUBLE, TYPE_OPERATORS),
                     ImmutableMap.of(6.0, 6.0), mapBlockOf(DOUBLE, DOUBLE, 6.0, 6.0)))
             .add(new TestColumn("t_map_boolean",
-                    getStandardMapObjectInspector(javaBooleanObjectInspector, javaBooleanObjectInspector),
+                    new MapType(BOOLEAN, BOOLEAN, TYPE_OPERATORS),
                     ImmutableMap.of(true, true),
                     mapBlockOf(BOOLEAN, BOOLEAN, true, true)))
             .add(new TestColumn("t_map_date",
-                    getStandardMapObjectInspector(javaDateObjectInspector, javaDateObjectInspector),
+                    new MapType(DATE, DATE, TYPE_OPERATORS),
                     ImmutableMap.of(HIVE_DATE, HIVE_DATE),
-                    mapBlockOf(DateType.DATE, DateType.DATE, DATE_DAYS, DATE_DAYS)))
+                    mapBlockOf(DATE, DATE, DATE_DAYS, DATE_DAYS)))
             .add(new TestColumn("t_map_timestamp",
-                    getStandardMapObjectInspector(javaTimestampObjectInspector, javaTimestampObjectInspector),
+                    new MapType(TIMESTAMP_MILLIS, TIMESTAMP_MILLIS, TYPE_OPERATORS),
                     ImmutableMap.of(HIVE_TIMESTAMP, HIVE_TIMESTAMP),
-                    mapBlockOf(TimestampType.TIMESTAMP_MILLIS, TimestampType.TIMESTAMP_MILLIS, TIMESTAMP_MICROS, TIMESTAMP_MICROS)))
-            .add(new TestColumn("t_map_decimal_precision_2",
-                    getStandardMapObjectInspector(DECIMAL_INSPECTOR_PRECISION_2, DECIMAL_INSPECTOR_PRECISION_2),
-                    ImmutableMap.of(WRITE_DECIMAL_PRECISION_2, WRITE_DECIMAL_PRECISION_2),
-                    decimalMapBlockOf(DECIMAL_TYPE_PRECISION_2, EXPECTED_DECIMAL_PRECISION_2)))
-            .add(new TestColumn("t_map_decimal_precision_4",
-                    getStandardMapObjectInspector(DECIMAL_INSPECTOR_PRECISION_4, DECIMAL_INSPECTOR_PRECISION_4),
-                    ImmutableMap.of(WRITE_DECIMAL_PRECISION_4, WRITE_DECIMAL_PRECISION_4),
-                    decimalMapBlockOf(DECIMAL_TYPE_PRECISION_4, EXPECTED_DECIMAL_PRECISION_4)))
-            .add(new TestColumn("t_map_decimal_precision_8",
-                    getStandardMapObjectInspector(DECIMAL_INSPECTOR_PRECISION_8, DECIMAL_INSPECTOR_PRECISION_8),
-                    ImmutableMap.of(WRITE_DECIMAL_PRECISION_8, WRITE_DECIMAL_PRECISION_8),
-                    decimalMapBlockOf(DECIMAL_TYPE_PRECISION_8, EXPECTED_DECIMAL_PRECISION_8)))
-            .add(new TestColumn("t_map_decimal_precision_17",
-                    getStandardMapObjectInspector(DECIMAL_INSPECTOR_PRECISION_17, DECIMAL_INSPECTOR_PRECISION_17),
-                    ImmutableMap.of(WRITE_DECIMAL_PRECISION_17, WRITE_DECIMAL_PRECISION_17),
-                    decimalMapBlockOf(DECIMAL_TYPE_PRECISION_17, EXPECTED_DECIMAL_PRECISION_17)))
-            .add(new TestColumn("t_map_decimal_precision_18",
-                    getStandardMapObjectInspector(DECIMAL_INSPECTOR_PRECISION_18, DECIMAL_INSPECTOR_PRECISION_18),
-                    ImmutableMap.of(WRITE_DECIMAL_PRECISION_18, WRITE_DECIMAL_PRECISION_18),
-                    decimalMapBlockOf(DECIMAL_TYPE_PRECISION_18, EXPECTED_DECIMAL_PRECISION_18)))
-            .add(new TestColumn("t_map_decimal_precision_38",
-                    getStandardMapObjectInspector(DECIMAL_INSPECTOR_PRECISION_38, DECIMAL_INSPECTOR_PRECISION_38),
-                    ImmutableMap.of(WRITE_DECIMAL_PRECISION_38, WRITE_DECIMAL_PRECISION_38),
-                    decimalMapBlockOf(DECIMAL_TYPE_PRECISION_38, EXPECTED_DECIMAL_PRECISION_38)))
-            .add(new TestColumn("t_array_empty", getStandardListObjectInspector(javaStringObjectInspector), ImmutableList.of(), arrayBlockOf(createUnboundedVarcharType())))
-            .add(new TestColumn("t_array_string", getStandardListObjectInspector(javaStringObjectInspector), ImmutableList.of("test"), arrayBlockOf(createUnboundedVarcharType(), "test")))
-            .add(new TestColumn("t_array_tinyint", getStandardListObjectInspector(javaByteObjectInspector), ImmutableList.of((byte) 1), arrayBlockOf(TINYINT, (byte) 1)))
-            .add(new TestColumn("t_array_smallint", getStandardListObjectInspector(javaShortObjectInspector), ImmutableList.of((short) 2), arrayBlockOf(SMALLINT, (short) 2)))
-            .add(new TestColumn("t_array_int", getStandardListObjectInspector(javaIntObjectInspector), ImmutableList.of(3), arrayBlockOf(INTEGER, 3)))
-            .add(new TestColumn("t_array_bigint", getStandardListObjectInspector(javaLongObjectInspector), ImmutableList.of(4L), arrayBlockOf(BIGINT, 4L)))
-            .add(new TestColumn("t_array_float", getStandardListObjectInspector(javaFloatObjectInspector), ImmutableList.of(5.0f), arrayBlockOf(REAL, 5.0f)))
-            .add(new TestColumn("t_array_double", getStandardListObjectInspector(javaDoubleObjectInspector), ImmutableList.of(6.0), arrayBlockOf(DOUBLE, 6.0)))
-            .add(new TestColumn("t_array_boolean", getStandardListObjectInspector(javaBooleanObjectInspector), ImmutableList.of(true), arrayBlockOf(BOOLEAN, true)))
+                    mapBlockOf(TIMESTAMP_MILLIS, TIMESTAMP_MILLIS, TIMESTAMP_MICROS_VALUE, TIMESTAMP_MICROS_VALUE)))
+            .add(new TestColumn("t_map_decimal_2",
+                    new MapType(DECIMAL_TYPE_2, DECIMAL_TYPE_2, TYPE_OPERATORS),
+                    ImmutableMap.of(WRITE_DECIMAL_2, WRITE_DECIMAL_2),
+                    decimalMapBlockOf(DECIMAL_TYPE_2, EXPECTED_DECIMAL_2)))
+            .add(new TestColumn("t_map_decimal_4",
+                    new MapType(DECIMAL_TYPE_4, DECIMAL_TYPE_4, TYPE_OPERATORS),
+                    ImmutableMap.of(WRITE_DECIMAL_4, WRITE_DECIMAL_4),
+                    decimalMapBlockOf(DECIMAL_TYPE_4, EXPECTED_DECIMAL_4)))
+            .add(new TestColumn("t_map_decimal_8",
+                    new MapType(DECIMAL_TYPE_8, DECIMAL_TYPE_8, TYPE_OPERATORS),
+                    ImmutableMap.of(WRITE_DECIMAL_8, WRITE_DECIMAL_8),
+                    decimalMapBlockOf(DECIMAL_TYPE_8, EXPECTED_DECIMAL_8)))
+            .add(new TestColumn("t_map_decimal_17",
+                    new MapType(DECIMAL_TYPE_17, DECIMAL_TYPE_17, TYPE_OPERATORS),
+                    ImmutableMap.of(WRITE_DECIMAL_17, WRITE_DECIMAL_17),
+                    decimalMapBlockOf(DECIMAL_TYPE_17, EXPECTED_DECIMAL_17)))
+            .add(new TestColumn("t_map_decimal_18",
+                    new MapType(DECIMAL_TYPE_18, DECIMAL_TYPE_18, TYPE_OPERATORS),
+                    ImmutableMap.of(WRITE_DECIMAL_18, WRITE_DECIMAL_18),
+                    decimalMapBlockOf(DECIMAL_TYPE_18, EXPECTED_DECIMAL_18)))
+            .add(new TestColumn("t_map_decimal_38",
+                    new MapType(DECIMAL_TYPE_38, DECIMAL_TYPE_38, TYPE_OPERATORS),
+                    ImmutableMap.of(WRITE_DECIMAL_38, WRITE_DECIMAL_38),
+                    decimalMapBlockOf(DECIMAL_TYPE_38, EXPECTED_DECIMAL_38)))
+            .add(new TestColumn("t_array_empty", new ArrayType(VARCHAR), ImmutableList.of(), arrayBlockOf(createUnboundedVarcharType())))
+            .add(new TestColumn("t_array_string", new ArrayType(VARCHAR), ImmutableList.of("test"), arrayBlockOf(createUnboundedVarcharType(), "test")))
+            .add(new TestColumn("t_array_tinyint", new ArrayType(TINYINT), ImmutableList.of((byte) 1), arrayBlockOf(TINYINT, (byte) 1)))
+            .add(new TestColumn("t_array_smallint", new ArrayType(SMALLINT), ImmutableList.of((short) 2), arrayBlockOf(SMALLINT, (short) 2)))
+            .add(new TestColumn("t_array_int", new ArrayType(INTEGER), ImmutableList.of(3), arrayBlockOf(INTEGER, 3)))
+            .add(new TestColumn("t_array_bigint", new ArrayType(BIGINT), ImmutableList.of(4L), arrayBlockOf(BIGINT, 4L)))
+            .add(new TestColumn("t_array_float", new ArrayType(REAL), ImmutableList.of(5.0f), arrayBlockOf(REAL, 5.0f)))
+            .add(new TestColumn("t_array_double", new ArrayType(DOUBLE), ImmutableList.of(6.0), arrayBlockOf(DOUBLE, 6.0)))
+            .add(new TestColumn("t_array_boolean", new ArrayType(BOOLEAN), ImmutableList.of(true), arrayBlockOf(BOOLEAN, true)))
             .add(new TestColumn(
                     "t_array_varchar",
-                    getStandardListObjectInspector(javaHiveVarcharObjectInspector),
-                    ImmutableList.of(new HiveVarchar("test", HiveVarchar.MAX_VARCHAR_LENGTH)),
-                    arrayBlockOf(createVarcharType(HiveVarchar.MAX_VARCHAR_LENGTH), "test")))
+                    new ArrayType(VARCHAR_HIVE_MAX),
+                    ImmutableList.of(new HiveVarchar("test", MAX_VARCHAR_LENGTH)),
+                    arrayBlockOf(createVarcharType(MAX_VARCHAR_LENGTH), "test")))
             .add(new TestColumn(
                     "t_array_char",
-                    getStandardListObjectInspector(CHAR_INSPECTOR_LENGTH_10),
+                    new ArrayType(CHAR_10),
                     ImmutableList.of(new HiveChar("test", 10)),
                     arrayBlockOf(createCharType(10), "test")))
             .add(new TestColumn("t_array_date",
-                    getStandardListObjectInspector(javaDateObjectInspector),
+                    new ArrayType(DATE),
                     ImmutableList.of(HIVE_DATE),
-                    arrayBlockOf(DateType.DATE, DATE_DAYS)))
+                    arrayBlockOf(DATE, DATE_DAYS)))
             .add(new TestColumn("t_array_timestamp",
-                    getStandardListObjectInspector(javaTimestampObjectInspector),
+                    new ArrayType(TIMESTAMP_MILLIS),
                     ImmutableList.of(HIVE_TIMESTAMP),
-                    arrayBlockOf(TimestampType.TIMESTAMP_MILLIS, TIMESTAMP_MICROS)))
-            .add(new TestColumn("t_array_decimal_precision_2",
-                    getStandardListObjectInspector(DECIMAL_INSPECTOR_PRECISION_2),
-                    ImmutableList.of(WRITE_DECIMAL_PRECISION_2),
-                    decimalArrayBlockOf(DECIMAL_TYPE_PRECISION_2, EXPECTED_DECIMAL_PRECISION_2)))
-            .add(new TestColumn("t_array_decimal_precision_4",
-                    getStandardListObjectInspector(DECIMAL_INSPECTOR_PRECISION_4),
-                    ImmutableList.of(WRITE_DECIMAL_PRECISION_4),
-                    decimalArrayBlockOf(DECIMAL_TYPE_PRECISION_4, EXPECTED_DECIMAL_PRECISION_4)))
-            .add(new TestColumn("t_array_decimal_precision_8",
-                    getStandardListObjectInspector(DECIMAL_INSPECTOR_PRECISION_8),
-                    ImmutableList.of(WRITE_DECIMAL_PRECISION_8),
-                    decimalArrayBlockOf(DECIMAL_TYPE_PRECISION_8, EXPECTED_DECIMAL_PRECISION_8)))
-            .add(new TestColumn("t_array_decimal_precision_17",
-                    getStandardListObjectInspector(DECIMAL_INSPECTOR_PRECISION_17),
-                    ImmutableList.of(WRITE_DECIMAL_PRECISION_17),
-                    decimalArrayBlockOf(DECIMAL_TYPE_PRECISION_17, EXPECTED_DECIMAL_PRECISION_17)))
-            .add(new TestColumn("t_array_decimal_precision_18",
-                    getStandardListObjectInspector(DECIMAL_INSPECTOR_PRECISION_18),
-                    ImmutableList.of(WRITE_DECIMAL_PRECISION_18),
-                    decimalArrayBlockOf(DECIMAL_TYPE_PRECISION_18, EXPECTED_DECIMAL_PRECISION_18)))
-            .add(new TestColumn("t_array_decimal_precision_38",
-                    getStandardListObjectInspector(DECIMAL_INSPECTOR_PRECISION_38),
-                    ImmutableList.of(WRITE_DECIMAL_PRECISION_38),
-                    decimalArrayBlockOf(DECIMAL_TYPE_PRECISION_38, EXPECTED_DECIMAL_PRECISION_38)))
+                    arrayBlockOf(TIMESTAMP_MILLIS, TIMESTAMP_MICROS_VALUE)))
+            .add(new TestColumn("t_array_decimal_2",
+                    new ArrayType(DECIMAL_TYPE_2),
+                    ImmutableList.of(WRITE_DECIMAL_2),
+                    decimalArrayBlockOf(DECIMAL_TYPE_2, EXPECTED_DECIMAL_2)))
+            .add(new TestColumn("t_array_decimal_4",
+                    new ArrayType(DECIMAL_TYPE_4),
+                    ImmutableList.of(WRITE_DECIMAL_4),
+                    decimalArrayBlockOf(DECIMAL_TYPE_4, EXPECTED_DECIMAL_4)))
+            .add(new TestColumn("t_array_decimal_8",
+                    new ArrayType(DECIMAL_TYPE_8),
+                    ImmutableList.of(WRITE_DECIMAL_8),
+                    decimalArrayBlockOf(DECIMAL_TYPE_8, EXPECTED_DECIMAL_8)))
+            .add(new TestColumn("t_array_decimal_17",
+                    new ArrayType(DECIMAL_TYPE_17),
+                    ImmutableList.of(WRITE_DECIMAL_17),
+                    decimalArrayBlockOf(DECIMAL_TYPE_17, EXPECTED_DECIMAL_17)))
+            .add(new TestColumn("t_array_decimal_18",
+                    new ArrayType(DECIMAL_TYPE_18),
+                    ImmutableList.of(WRITE_DECIMAL_18),
+                    decimalArrayBlockOf(DECIMAL_TYPE_18, EXPECTED_DECIMAL_18)))
+            .add(new TestColumn("t_array_decimal_38",
+                    new ArrayType(DECIMAL_TYPE_38),
+                    ImmutableList.of(WRITE_DECIMAL_38),
+                    decimalArrayBlockOf(DECIMAL_TYPE_38, EXPECTED_DECIMAL_38)))
             .add(new TestColumn("t_struct_bigint",
-                    getStandardStructObjectInspector(ImmutableList.of("s_bigint"), ImmutableList.of(javaLongObjectInspector)),
-                    new Long[] {1L},
+                    rowType(field("s_bigint", BIGINT)),
+                    ImmutableList.of(1L),
                     rowBlockOf(ImmutableList.of(BIGINT), 1)))
             .add(new TestColumn("t_complex",
-                    getStandardMapObjectInspector(
-                            javaStringObjectInspector,
-                            getStandardListObjectInspector(
-                                    getStandardStructObjectInspector(
-                                            ImmutableList.of("s_int"),
-                                            ImmutableList.of(javaIntObjectInspector)))),
-                    ImmutableMap.of("test", ImmutableList.<Object>of(new Integer[] {1})),
+                    new MapType(
+                            VARCHAR,
+                            new ArrayType(rowType(field("s_int", INTEGER))),
+                            TYPE_OPERATORS),
+                    ImmutableMap.of("test", ImmutableList.<Object>of(ImmutableList.of(1))),
                     mapBlockOf(createUnboundedVarcharType(), new ArrayType(RowType.anonymous(ImmutableList.of(INTEGER))),
                             "test", arrayBlockOf(RowType.anonymous(ImmutableList.of(INTEGER)), rowBlockOf(ImmutableList.of(INTEGER), 1L)))))
             .add(new TestColumn("t_map_null_key_complex_value",
-                    getStandardMapObjectInspector(
-                            javaStringObjectInspector,
-                            getStandardMapObjectInspector(javaLongObjectInspector, javaBooleanObjectInspector)),
+                    new MapType(
+                            VARCHAR,
+                            new MapType(BIGINT, BOOLEAN, TYPE_OPERATORS),
+                            TYPE_OPERATORS),
                     asMap(new String[] {null, "k"}, new ImmutableMap[] {ImmutableMap.of(15L, true), ImmutableMap.of(16L, false)}),
                     mapBlockOf(createUnboundedVarcharType(), mapType(BIGINT, BOOLEAN), "k", mapBlockOf(BIGINT, BOOLEAN, 16L, false))))
             .add(new TestColumn("t_map_null_key_complex_key_value",
-                    getStandardMapObjectInspector(
-                            getStandardListObjectInspector(javaStringObjectInspector),
-                            getStandardMapObjectInspector(javaLongObjectInspector, javaBooleanObjectInspector)),
+                    new MapType(
+                            new ArrayType(VARCHAR),
+                            new MapType(BIGINT, BOOLEAN, TYPE_OPERATORS),
+                            TYPE_OPERATORS),
                     asMap(new ImmutableList[] {null, ImmutableList.of("k", "ka")}, new ImmutableMap[] {ImmutableMap.of(15L, true), ImmutableMap.of(16L, false)}),
                     mapBlockOf(new ArrayType(createUnboundedVarcharType()), mapType(BIGINT, BOOLEAN), arrayBlockOf(createUnboundedVarcharType(), "k", "ka"), mapBlockOf(BIGINT, BOOLEAN, 16L, false))))
-            .add(new TestColumn("t_struct_nested", getStandardStructObjectInspector(ImmutableList.of("struct_field"),
-                    ImmutableList.of(getStandardListObjectInspector(javaStringObjectInspector))), ImmutableList.of(ImmutableList.of("1", "2", "3")), rowBlockOf(ImmutableList.of(new ArrayType(createUnboundedVarcharType())), arrayBlockOf(createUnboundedVarcharType(), "1", "2", "3"))))
-            .add(new TestColumn("t_struct_null", getStandardStructObjectInspector(ImmutableList.of("struct_field_null", "struct_field_null2"),
-                    ImmutableList.of(javaStringObjectInspector, javaStringObjectInspector)), Arrays.asList(null, null), rowBlockOf(ImmutableList.of(createUnboundedVarcharType(), createUnboundedVarcharType()), null, null)))
-            .add(new TestColumn("t_struct_non_nulls_after_nulls", getStandardStructObjectInspector(ImmutableList.of("struct_non_nulls_after_nulls1", "struct_non_nulls_after_nulls2"),
-                    ImmutableList.of(javaIntObjectInspector, javaStringObjectInspector)), Arrays.asList(null, "some string"), rowBlockOf(ImmutableList.of(INTEGER, createUnboundedVarcharType()), null, "some string")))
+            .add(new TestColumn("t_struct_nested",
+                    rowType(field("struct_field", new ArrayType(VARCHAR))),
+                    ImmutableList.of(ImmutableList.of("1", "2", "3")),
+                    rowBlockOf(ImmutableList.of(new ArrayType(createUnboundedVarcharType())), arrayBlockOf(createUnboundedVarcharType(), "1", "2", "3"))))
+            .add(new TestColumn("t_struct_null",
+                    rowType(field("struct_field_null", VARCHAR), field("struct_field_null2", VARCHAR)),
+                    Arrays.asList(null, null),
+                    rowBlockOf(ImmutableList.of(createUnboundedVarcharType(), createUnboundedVarcharType()), null, null)))
+            .add(new TestColumn("t_struct_non_nulls_after_nulls",
+                    rowType(field("struct_non_nulls_after_nulls1", INTEGER), field("struct_non_nulls_after_nulls2", VARCHAR)),
+                    Arrays.asList(null, "some string"),
+                    rowBlockOf(ImmutableList.of(INTEGER, createUnboundedVarcharType()), null, "some string")))
             .add(new TestColumn("t_nested_struct_non_nulls_after_nulls",
-                    getStandardStructObjectInspector(
-                            ImmutableList.of("struct_field1", "struct_field2", "strict_field3"),
-                            ImmutableList.of(
-                                    javaIntObjectInspector,
-                                    javaStringObjectInspector,
-                                    getStandardStructObjectInspector(
-                                            ImmutableList.of("nested_struct_field1", "nested_struct_field2"),
-                                            ImmutableList.of(javaIntObjectInspector, javaStringObjectInspector)))),
+                    rowType(
+                            field("struct_field1", INTEGER),
+                            field("struct_field2", VARCHAR),
+                            field("strict_field3", rowType(field("nested_struct_field1", INTEGER), field("nested_struct_field2", VARCHAR)))),
                     Arrays.asList(null, "some string", Arrays.asList(null, "nested_string2")),
                     rowBlockOf(
                             ImmutableList.of(
@@ -458,13 +503,13 @@ public abstract class AbstractTestHiveFileFormats
                                     RowType.anonymous(ImmutableList.of(INTEGER, createUnboundedVarcharType()))),
                             null, "some string", rowBlockOf(ImmutableList.of(INTEGER, createUnboundedVarcharType()), null, "nested_string2"))))
             .add(new TestColumn("t_map_null_value",
-                    getStandardMapObjectInspector(javaStringObjectInspector, javaStringObjectInspector),
+                    new MapType(VARCHAR, VARCHAR, TYPE_OPERATORS),
                     asMap(new String[] {"k1", "k2", "k3"}, new String[] {"v1", null, "v3"}),
                     mapBlockOf(createUnboundedVarcharType(), createUnboundedVarcharType(), new String[] {"k1", "k2", "k3"}, new String[] {"v1", null, "v3"})))
-            .add(new TestColumn("t_array_string_starting_with_nulls", getStandardListObjectInspector(javaStringObjectInspector), Arrays.asList(null, "test"), arrayBlockOf(createUnboundedVarcharType(), null, "test")))
-            .add(new TestColumn("t_array_string_with_nulls_in_between", getStandardListObjectInspector(javaStringObjectInspector), Arrays.asList("test-1", null, "test-2"), arrayBlockOf(createUnboundedVarcharType(), "test-1", null, "test-2")))
-            .add(new TestColumn("t_array_string_ending_with_nulls", getStandardListObjectInspector(javaStringObjectInspector), Arrays.asList("test", null), arrayBlockOf(createUnboundedVarcharType(), "test", null)))
-            .add(new TestColumn("t_array_string_all_nulls", getStandardListObjectInspector(javaStringObjectInspector), Arrays.asList(null, null, null), arrayBlockOf(createUnboundedVarcharType(), null, null, null)))
+            .add(new TestColumn("t_array_string_starting_with_nulls", new ArrayType(VARCHAR), Arrays.asList(null, "test"), arrayBlockOf(createUnboundedVarcharType(), null, "test")))
+            .add(new TestColumn("t_array_string_with_nulls_in_between", new ArrayType(VARCHAR), Arrays.asList("test-1", null, "test-2"), arrayBlockOf(createUnboundedVarcharType(), "test-1", null, "test-2")))
+            .add(new TestColumn("t_array_string_ending_with_nulls", new ArrayType(VARCHAR), Arrays.asList("test", null), arrayBlockOf(createUnboundedVarcharType(), "test", null)))
+            .add(new TestColumn("t_array_string_all_nulls", new ArrayType(VARCHAR), Arrays.asList(null, null, null), arrayBlockOf(createUnboundedVarcharType(), null, null, null)))
             .build();
 
     private static <K, V> Map<K, V> asMap(K[] keys, V[] values)
@@ -480,54 +525,25 @@ public abstract class AbstractTestHiveFileFormats
 
     protected List<HiveColumnHandle> getColumnHandles(List<TestColumn> testColumns)
     {
-        List<HiveColumnHandle> columns = new ArrayList<>();
-        Map<String, Integer> hiveColumnIndexes = new HashMap<>();
+        List<HiveColumnHandle> columns = new ArrayList<>(testColumns.size());
 
         int nextHiveColumnIndex = 0;
-        for (int i = 0; i < testColumns.size(); i++) {
-            TestColumn testColumn = testColumns.get(i);
-
+        for (TestColumn testColumn : testColumns) {
             int columnIndex;
-            if (testColumn.isPartitionKey()) {
+            if (testColumn.partitionKey()) {
                 columnIndex = -1;
             }
             else {
-                if (hiveColumnIndexes.get(testColumn.getBaseName()) != null) {
-                    columnIndex = hiveColumnIndexes.get(testColumn.getBaseName());
-                }
-                else {
-                    columnIndex = nextHiveColumnIndex++;
-                    hiveColumnIndexes.put(testColumn.getBaseName(), columnIndex);
-                }
+                columnIndex = nextHiveColumnIndex++;
             }
 
-            if (testColumn.getDereferenceNames().size() == 0) {
-                HiveType hiveType = HiveType.valueOf(testColumn.getObjectInspector().getTypeName());
-                columns.add(createBaseColumn(testColumn.getName(), columnIndex, hiveType, hiveType.getType(TESTING_TYPE_MANAGER), testColumn.isPartitionKey() ? PARTITION_KEY : REGULAR, Optional.empty()));
-            }
-            else {
-                HiveType baseHiveType = HiveType.valueOf(testColumn.getBaseObjectInspector().getTypeName());
-                HiveType partialHiveType = baseHiveType.getHiveTypeForDereferences(testColumn.getDereferenceIndices()).get();
-                HiveColumnHandle hiveColumnHandle = new HiveColumnHandle(
-                        testColumn.getBaseName(),
-                        columnIndex,
-                        baseHiveType,
-                        baseHiveType.getType(TESTING_TYPE_MANAGER),
-                        Optional.of(new HiveColumnProjectionInfo(
-                                testColumn.getDereferenceIndices(),
-                                testColumn.getDereferenceNames(),
-                                partialHiveType,
-                                partialHiveType.getType(TESTING_TYPE_MANAGER))),
-                        testColumn.isPartitionKey() ? PARTITION_KEY : REGULAR,
-                        Optional.empty());
-                columns.add(hiveColumnHandle);
-            }
+            columns.add(testColumn.toHiveColumnHandle(columnIndex));
         }
         return columns;
     }
 
-    public static FileSplit createTestFileTrino(
-            String filePath,
+    public static void createTestFileTrino(
+            Location location,
             HiveStorageFormat storageFormat,
             HiveCompressionCodec compressionCodec,
             List<TestColumn> testColumns,
@@ -537,13 +553,11 @@ public abstract class AbstractTestHiveFileFormats
     {
         // filter out partition keys, which are not written to the file
         testColumns = testColumns.stream()
-                .filter(column -> !column.isPartitionKey())
+                .filter(column -> !column.partitionKey())
                 .collect(toImmutableList());
 
         List<Type> types = testColumns.stream()
-                .map(TestColumn::getType)
-                .map(HiveType::valueOf)
-                .map(type -> type.getType(TESTING_TYPE_MANAGER))
+                .map(TestColumn::type)
                 .collect(toList());
 
         PageBuilder pageBuilder = new PageBuilder(types);
@@ -551,35 +565,23 @@ public abstract class AbstractTestHiveFileFormats
         for (int rowNumber = 0; rowNumber < numRows; rowNumber++) {
             pageBuilder.declarePosition();
             for (int columnNumber = 0; columnNumber < testColumns.size(); columnNumber++) {
-                serializeObject(
-                        types.get(columnNumber),
-                        pageBuilder.getBlockBuilder(columnNumber),
-                        testColumns.get(columnNumber).getWriteValue(),
-                        testColumns.get(columnNumber).getObjectInspector(),
-                        false);
+                TestColumn testColumn = testColumns.get(columnNumber);
+                writeValue(testColumn.type(), pageBuilder.getBlockBuilder(columnNumber), testColumn.writeValue());
             }
         }
         Page page = pageBuilder.build();
 
-        Properties tableProperties = new Properties();
-        tableProperties.setProperty(
-                "columns",
-                testColumns.stream()
-                        .map(TestColumn::getName)
-                        .collect(Collectors.joining(",")));
-
-        tableProperties.setProperty(
-                "columns.types",
-                testColumns.stream()
-                        .map(TestColumn::getType)
-                        .collect(Collectors.joining(",")));
+        Map<String, String> tableProperties = ImmutableMap.<String, String>builder()
+                .put(LIST_COLUMNS, testColumns.stream().map(TestColumn::name).collect(Collectors.joining(",")))
+                .put(LIST_COLUMN_TYPES, testColumns.stream().map(TestColumn::type).map(HiveTypeTranslator::toHiveType).map(HiveType::toString).collect(Collectors.joining(",")))
+                .buildOrThrow();
 
         Optional<FileWriter> fileWriter = fileWriterFactory.createFileWriter(
-                Location.of(filePath),
+                location,
                 testColumns.stream()
-                        .map(TestColumn::getName)
+                        .map(TestColumn::name)
                         .collect(toList()),
-                StorageFormat.fromHiveStorageFormat(storageFormat),
+                storageFormat.toStorageFormat(),
                 compressionCodec,
                 tableProperties,
                 session,
@@ -591,12 +593,11 @@ public abstract class AbstractTestHiveFileFormats
         FileWriter hiveFileWriter = fileWriter.orElseThrow(() -> new IllegalArgumentException("fileWriterFactory"));
         hiveFileWriter.appendRows(page);
         hiveFileWriter.commit();
-
-        return new FileSplit(new Path(filePath), 0, new File(filePath).length(), new String[0]);
     }
 
-    public static FileSplit createTestFileHive(
-            String filePath,
+    public static void createTestFileHive(
+            TrinoFileSystemFactory fileSystemFactory,
+            Location location,
             HiveStorageFormat storageFormat,
             HiveCompressionCodec compressionCodec,
             List<TestColumn> testColumns,
@@ -608,42 +609,37 @@ public abstract class AbstractTestHiveFileFormats
 
         // filter out partition keys, which are not written to the file
         testColumns = testColumns.stream()
-                .filter(column -> !column.isPartitionKey())
+                .filter(column -> !column.partitionKey())
                 .collect(toImmutableList());
 
         Properties tableProperties = new Properties();
-        tableProperties.setProperty(
-                "columns",
-                testColumns.stream()
-                        .map(TestColumn::getName)
-                        .collect(Collectors.joining(",")));
-        tableProperties.setProperty(
-                "columns.types",
-                testColumns.stream()
-                        .map(TestColumn::getType)
-                        .collect(Collectors.joining(",")));
-        serializer.initialize(newEmptyConfiguration(), tableProperties);
+        tableProperties.setProperty(LIST_COLUMNS, testColumns.stream().map(TestColumn::name).collect(Collectors.joining(",")));
+        tableProperties.setProperty(LIST_COLUMN_TYPES, testColumns.stream().map(testColumn -> toHiveType(testColumn.type()).toString()).collect(Collectors.joining(",")));
+        serializer.initialize(ConfigurationInstantiator.newEmptyConfiguration(), tableProperties);
 
-        JobConf jobConf = new JobConf(newEmptyConfiguration());
+        JobConf jobConf = new JobConf(false);
         configureCompression(jobConf, compressionCodec);
 
-        RecordWriter recordWriter = outputFormat.getHiveRecordWriter(
-                jobConf,
-                new Path(filePath),
-                Text.class,
-                compressionCodec != HiveCompressionCodec.NONE,
-                tableProperties,
-                () -> {});
-
+        File file = File.createTempFile("trino_test", "data");
+        verify(file.delete());
         try {
-            serializer.initialize(newEmptyConfiguration(), tableProperties);
+            FileSinkOperator.RecordWriter recordWriter = outputFormat.getHiveRecordWriter(
+                    jobConf,
+                    new Path(file.getAbsolutePath()),
+                    Text.class,
+                    compressionCodec != HiveCompressionCodec.NONE,
+                    tableProperties,
+                    () -> {});
+
+            serializer.initialize(ConfigurationInstantiator.newEmptyConfiguration(), tableProperties);
 
             SettableStructObjectInspector objectInspector = getStandardStructObjectInspector(
                     testColumns.stream()
-                            .map(TestColumn::getName)
+                            .map(TestColumn::name)
                             .collect(toImmutableList()),
                     testColumns.stream()
-                            .map(TestColumn::getObjectInspector)
+                            .map(TestColumn::type)
+                            .map(AbstractTestHiveFileFormats::getJavaObjectInspector)
                             .collect(toImmutableList()));
 
             Object row = objectInspector.create();
@@ -652,26 +648,189 @@ public abstract class AbstractTestHiveFileFormats
 
             for (int rowNumber = 0; rowNumber < numRows; rowNumber++) {
                 for (int i = 0; i < testColumns.size(); i++) {
-                    Object writeValue = testColumns.get(i).getWriteValue();
-                    if (writeValue instanceof Slice) {
-                        writeValue = ((Slice) writeValue).getBytes();
-                    }
-                    objectInspector.setStructFieldData(row, fields.get(i), writeValue);
+                    objectInspector.setStructFieldData(row, fields.get(i), testColumns.get(i).writeValue());
                 }
 
                 Writable record = serializer.serialize(row, objectInspector);
                 recordWriter.write(record);
             }
+            recordWriter.close(false);
+
+            // copy the file data to the TrinoFileSystem
+            TrinoFileSystem fileSystem = fileSystemFactory.create(ConnectorIdentity.ofUser("test"));
+            try (OutputStream outputStream = fileSystem.newOutputFile(location).create()) {
+                outputStream.write(readAllBytes(file.toPath()));
+            }
         }
         finally {
-            recordWriter.close(false);
+            verify(file.delete());
         }
+    }
 
-        // todo to test with compression, the file must be renamed with the compression extension
-        Path path = new Path(filePath);
-        path.getFileSystem(newEmptyConfiguration()).setVerifyChecksum(true);
-        File file = new File(filePath);
-        return new FileSplit(path, 0, file.length(), new String[0]);
+    private static void writeValue(Type type, BlockBuilder builder, Object object)
+    {
+        requireNonNull(builder, "builder is null");
+
+        if (object == null) {
+            builder.appendNull();
+        }
+        else if (type == BOOLEAN) {
+            BOOLEAN.writeBoolean(builder, (boolean) object);
+        }
+        else if (type == TINYINT) {
+            TINYINT.writeByte(builder, (byte) object);
+        }
+        else if (type == SMALLINT) {
+            SMALLINT.writeShort(builder, (short) object);
+        }
+        else if (type == INTEGER) {
+            INTEGER.writeInt(builder, (int) object);
+        }
+        else if (type == BIGINT) {
+            BIGINT.writeLong(builder, (long) object);
+        }
+        else if (type == REAL) {
+            REAL.writeFloat(builder, (float) object);
+        }
+        else if (type == DOUBLE) {
+            DOUBLE.writeDouble(builder, (double) object);
+        }
+        else if (type instanceof VarcharType varcharType) {
+            if (object instanceof HiveVarchar) {
+                object = ((HiveVarchar) object).getValue();
+            }
+            varcharType.writeSlice(builder, utf8Slice((String) object));
+        }
+        else if (type instanceof CharType charType) {
+            if (object instanceof HiveChar) {
+                object = ((HiveChar) object).getValue();
+            }
+            charType.writeSlice(builder, truncateToLengthAndTrimSpaces(utf8Slice((String) object), charType.getLength()));
+        }
+        else if (type == DATE) {
+            long days = ((Date) object).toEpochDay();
+            DATE.writeLong(builder, days);
+        }
+        else if (type instanceof TimestampType timestampType) {
+            Timestamp timestamp = (Timestamp) object;
+            long epochSecond = timestamp.toEpochSecond();
+            int nanosOfSecond = (int) round(timestamp.getNanos(), 9 - timestampType.getPrecision());
+            createTimestampEncoder(timestampType, UTC).write(new DecodedTimestamp(epochSecond, nanosOfSecond), builder);
+        }
+        else if (type == VARBINARY) {
+            VARBINARY.writeSlice(builder, Slices.wrappedBuffer((byte[]) object));
+        }
+        else if (type instanceof DecimalType decimalType) {
+            HiveDecimalWritable hiveDecimal = new HiveDecimalWritable((HiveDecimal) object);
+            Int128 value = Int128.fromBigEndian(hiveDecimal.getInternalStorage());
+            value = Int128Math.rescale(value, decimalType.getScale() - hiveDecimal.getScale());
+            if (decimalType.isShort()) {
+                type.writeLong(builder, value.toLongExact());
+            }
+            else {
+                type.writeObject(builder, value);
+            }
+        }
+        else if (type instanceof ArrayType arrayType) {
+            Type elementType = arrayType.getElementType();
+            List<?> list = (List<?>) object;
+            ((ArrayBlockBuilder) builder).buildEntry(elementBuilder -> {
+                for (Object element : list) {
+                    writeValue(elementType, elementBuilder, element);
+                }
+            });
+        }
+        else if (type instanceof MapType mapType) {
+            Type keyType = mapType.getKeyType();
+            Type valueType = mapType.getValueType();
+            Map<?, ?> map = (Map<?, ?>) object;
+            ((MapBlockBuilder) builder).buildEntry((keyBuilder, valueBuilder) -> {
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    // Hive skips map entries with null keys
+                    if (entry.getKey() != null) {
+                        writeValue(keyType, keyBuilder, entry.getKey());
+                        writeValue(valueType, valueBuilder, entry.getValue());
+                    }
+                }
+            });
+        }
+        else if (type instanceof RowType rowType) {
+            List<Type> typeParameters = rowType.getTypeParameters();
+            List<?> foo = (List<?>) object;
+            ((RowBlockBuilder) builder).buildEntry(fieldBuilders -> {
+                for (int i = 0; i < typeParameters.size(); i++) {
+                    writeValue(typeParameters.get(i), fieldBuilders.get(i), foo.get(i));
+                }
+            });
+        }
+        else {
+            throw new RuntimeException("Unsupported type: " + type);
+        }
+    }
+
+    private static ObjectInspector getJavaObjectInspector(Type type)
+    {
+        if (type.equals(BOOLEAN)) {
+            return javaBooleanObjectInspector;
+        }
+        if (type.equals(BIGINT)) {
+            return javaLongObjectInspector;
+        }
+        if (type.equals(INTEGER)) {
+            return javaIntObjectInspector;
+        }
+        if (type.equals(SMALLINT)) {
+            return javaShortObjectInspector;
+        }
+        if (type.equals(TINYINT)) {
+            return javaByteObjectInspector;
+        }
+        if (type.equals(REAL)) {
+            return javaFloatObjectInspector;
+        }
+        if (type.equals(DOUBLE)) {
+            return javaDoubleObjectInspector;
+        }
+        if (type instanceof VarcharType varcharType) {
+            return varcharType.getLength()
+                    .map(length -> getPrimitiveJavaObjectInspector(new VarcharTypeInfo(length)))
+                    .orElse(javaStringObjectInspector);
+        }
+        if (type instanceof CharType charType) {
+            return getPrimitiveJavaObjectInspector(new CharTypeInfo(charType.getLength()));
+        }
+        if (type.equals(VARBINARY)) {
+            return javaByteArrayObjectInspector;
+        }
+        if (type.equals(DATE)) {
+            return javaDateObjectInspector;
+        }
+        if (type instanceof TimestampType) {
+            return javaTimestampObjectInspector;
+        }
+        if (type instanceof DecimalType decimalType) {
+            return getPrimitiveJavaObjectInspector(new DecimalTypeInfo(decimalType.getPrecision(), decimalType.getScale()));
+        }
+        if (type instanceof ArrayType arrayType) {
+            return getStandardListObjectInspector(getJavaObjectInspector(arrayType.getElementType()));
+        }
+        if (type instanceof MapType mapType) {
+            ObjectInspector keyObjectInspector = getJavaObjectInspector(mapType.getKeyType());
+            ObjectInspector valueObjectInspector = getJavaObjectInspector(mapType.getValueType());
+            return getStandardMapObjectInspector(keyObjectInspector, valueObjectInspector);
+        }
+        if (type instanceof RowType rowType) {
+            return getStandardStructObjectInspector(
+                    rowType.getFields().stream()
+                            .map(RowType.Field::getName)
+                            .map(Optional::orElseThrow)
+                            .collect(toList()),
+                    rowType.getFields().stream()
+                            .map(RowType.Field::getType)
+                            .map(AbstractTestHiveFileFormats::getJavaObjectInspector)
+                            .collect(toList()));
+        }
+        throw new IllegalArgumentException("unsupported type: " + type);
     }
 
     private static <T> T newInstance(String className, Class<T> superType)
@@ -727,241 +886,163 @@ public abstract class AbstractTestHiveFileFormats
         throw new RuntimeException("unknown type");
     }
 
-    protected void checkCursor(RecordCursor cursor, List<TestColumn> testColumns, int rowCount)
-    {
-        List<Type> types = testColumns.stream()
-                .map(column -> column.getObjectInspector().getTypeName())
-                .map(type -> HiveType.valueOf(type).getType(TESTING_TYPE_MANAGER))
-                .collect(toImmutableList());
-
-        Map<Type, MethodHandle> distinctFromOperators = types.stream().distinct()
-                .collect(toImmutableMap(identity(), HiveTestUtils::distinctFromOperator));
-
-        for (int row = 0; row < rowCount; row++) {
-            assertTrue(cursor.advanceNextPosition());
-            for (int i = 0, testColumnsSize = testColumns.size(); i < testColumnsSize; i++) {
-                TestColumn testColumn = testColumns.get(i);
-
-                Type type = types.get(i);
-                Object fieldFromCursor = getFieldFromCursor(cursor, type, i);
-                if (fieldFromCursor == null) {
-                    assertEquals(null, testColumn.getExpectedValue(), "Expected null for column " + testColumn.getName());
-                }
-                else if (type instanceof DecimalType decimalType) {
-                    fieldFromCursor = new BigDecimal((BigInteger) fieldFromCursor, decimalType.getScale());
-                    assertEquals(fieldFromCursor, testColumn.getExpectedValue(), "Wrong value for column " + testColumn.getName());
-                }
-                else if (testColumn.getObjectInspector().getTypeName().equals("float")) {
-                    assertEquals((float) fieldFromCursor, (float) testColumn.getExpectedValue(), (float) EPSILON);
-                }
-                else if (testColumn.getObjectInspector().getTypeName().equals("double")) {
-                    assertEquals((double) fieldFromCursor, (double) testColumn.getExpectedValue(), EPSILON);
-                }
-                else if (testColumn.getObjectInspector().getTypeName().equals("tinyint")) {
-                    assertEquals(((Number) fieldFromCursor).byteValue(), testColumn.getExpectedValue());
-                }
-                else if (testColumn.getObjectInspector().getTypeName().equals("smallint")) {
-                    assertEquals(((Number) fieldFromCursor).shortValue(), testColumn.getExpectedValue());
-                }
-                else if (testColumn.getObjectInspector().getTypeName().equals("int")) {
-                    assertEquals(((Number) fieldFromCursor).intValue(), testColumn.getExpectedValue());
-                }
-                else if (testColumn.getObjectInspector().getCategory() == Category.PRIMITIVE) {
-                    assertEquals(fieldFromCursor, testColumn.getExpectedValue(), "Wrong value for column " + testColumn.getName());
-                }
-                else {
-                    Block expected = (Block) testColumn.getExpectedValue();
-                    Block actual = (Block) fieldFromCursor;
-                    boolean distinct = isDistinctFrom(distinctFromOperators.get(type), expected, actual);
-                    assertFalse(distinct, "Wrong value for column: " + testColumn.getName());
-                }
-            }
-        }
-        assertFalse(cursor.advanceNextPosition());
-    }
-
-    protected void checkPageSource(ConnectorPageSource pageSource, List<TestColumn> testColumns, List<Type> types, int rowCount)
+    protected void checkPageSource(ConnectorPageSource pageSource, List<TestColumn> testColumns, int rowCount)
             throws IOException
     {
-        try {
-            MaterializedResult result = materializeSourceDataStream(SESSION, pageSource, types);
-            assertEquals(result.getMaterializedRows().size(), rowCount);
+        try (pageSource) {
+            MaterializedResult result = materializeSourceDataStream(SESSION, pageSource, testColumns.stream().map(TestColumn::type).collect(toImmutableList()));
+            assertThat(result.getMaterializedRows()).hasSize(rowCount);
             for (MaterializedRow row : result) {
                 for (int i = 0, testColumnsSize = testColumns.size(); i < testColumnsSize; i++) {
                     TestColumn testColumn = testColumns.get(i);
-                    Type type = types.get(i);
+                    Type type = testColumn.type();
 
                     Object actualValue = row.getField(i);
-                    Object expectedValue = testColumn.getExpectedValue();
+                    Object expectedValue = testColumn.expectedValue();
 
                     if (expectedValue instanceof Slice) {
                         expectedValue = ((Slice) expectedValue).toStringUtf8();
                     }
 
                     if (actualValue == null || expectedValue == null) {
-                        assertEquals(actualValue, expectedValue, "Wrong value for column " + testColumn.getName());
+                        assertThat(actualValue)
+                                .describedAs("Wrong value for column " + testColumn.name())
+                                .isEqualTo(expectedValue);
                     }
-                    else if (testColumn.getObjectInspector().getTypeName().equals("float")) {
-                        assertEquals((float) actualValue, (float) expectedValue, EPSILON, "Wrong value for column " + testColumn.getName());
+                    else if (type == REAL) {
+                        assertThat((float) actualValue).describedAs("Wrong value for column %s", testColumn.name())
+                                .isCloseTo((float) expectedValue, offset((float) EPSILON));
                     }
-                    else if (testColumn.getObjectInspector().getTypeName().equals("double")) {
-                        assertEquals((double) actualValue, (double) expectedValue, EPSILON, "Wrong value for column " + testColumn.getName());
+                    else if (type == DOUBLE) {
+                        assertThat((double) actualValue).describedAs("Wrong value for column %s", testColumn.name())
+                                .isCloseTo((double) expectedValue, offset((double) EPSILON));
                     }
-                    else if (testColumn.getObjectInspector().getTypeName().equals("date")) {
-                        SqlDate expectedDate = new SqlDate(((Long) expectedValue).intValue());
-                        assertEquals(actualValue, expectedDate, "Wrong value for column " + testColumn.getName());
+                    else if (type == DATE) {
+                        SqlDate expectedDate = new SqlDate(toIntExact((long) expectedValue));
+                        assertThat(actualValue)
+                                .describedAs("Wrong value for column " + testColumn.name())
+                                .isEqualTo(expectedDate);
                     }
-                    else if (testColumn.getObjectInspector().getTypeName().equals("int") ||
-                            testColumn.getObjectInspector().getTypeName().equals("smallint") ||
-                            testColumn.getObjectInspector().getTypeName().equals("tinyint")) {
-                        assertEquals(actualValue, expectedValue);
+                    else if (type == BIGINT || type == INTEGER || type == SMALLINT || type == TINYINT || type == BOOLEAN) {
+                        assertThat(actualValue).isEqualTo(expectedValue);
                     }
-                    else if (testColumn.getObjectInspector().getTypeName().equals("timestamp")) {
-                        SqlTimestamp expectedTimestamp = sqlTimestampOf(floorDiv((Long) expectedValue, MICROSECONDS_PER_MILLISECOND));
-                        assertEquals(actualValue, expectedTimestamp, "Wrong value for column " + testColumn.getName());
+                    else if (type instanceof TimestampType timestampType && timestampType.getPrecision() == 3) {
+                        // the expected value is in micros to simplify the array, map, and row types
+                        SqlTimestamp expectedTimestamp = sqlTimestampOf(3, floorDiv((long) expectedValue, MICROSECONDS_PER_MILLISECOND));
+                        assertThat(actualValue)
+                                .describedAs("Wrong value for column " + testColumn.name())
+                                .isEqualTo(expectedTimestamp);
                     }
-                    else if (testColumn.getObjectInspector().getTypeName().startsWith("char")) {
-                        assertEquals(actualValue, padSpaces((String) expectedValue, (CharType) type), "Wrong value for column " + testColumn.getName());
+                    else if (type instanceof CharType) {
+                        assertThat(actualValue)
+                                .describedAs("Wrong value for column " + testColumn.name())
+                                .isEqualTo(padSpaces((String) expectedValue, (CharType) type));
                     }
-                    else if (testColumn.getObjectInspector().getCategory() == Category.PRIMITIVE) {
-                        if (expectedValue instanceof Slice) {
-                            expectedValue = ((Slice) expectedValue).toStringUtf8();
-                        }
-
-                        if (actualValue instanceof Slice) {
-                            actualValue = ((Slice) actualValue).toStringUtf8();
-                        }
-                        if (actualValue instanceof SqlVarbinary) {
-                            actualValue = new String(((SqlVarbinary) actualValue).getBytes(), UTF_8);
-                        }
-
-                        if (actualValue instanceof SqlDecimal) {
-                            actualValue = new BigDecimal(actualValue.toString());
-                        }
-                        assertEquals(actualValue, expectedValue, "Wrong value for column " + testColumn.getName());
+                    else if (type instanceof VarcharType) {
+                        assertThat(actualValue)
+                                .describedAs("Wrong value for column " + testColumn.name())
+                                .isEqualTo(expectedValue);
+                    }
+                    else if (type == VARBINARY) {
+                        assertThat(new String(((SqlVarbinary) actualValue).getBytes(), UTF_8))
+                                .describedAs("Wrong value for column " + testColumn.name())
+                                .isEqualTo(expectedValue);
+                    }
+                    else if (type instanceof DecimalType) {
+                        assertThat(new BigDecimal(actualValue.toString()))
+                                .describedAs("Wrong value for column " + testColumn.name())
+                                .isEqualTo(expectedValue);
                     }
                     else {
                         BlockBuilder builder = type.createBlockBuilder(null, 1);
                         type.writeObject(builder, expectedValue);
                         expectedValue = type.getObjectValue(SESSION, builder.build(), 0);
-                        assertEquals(actualValue, expectedValue, "Wrong value for column " + testColumn.getName());
+                        assertThat(actualValue)
+                                .describedAs("Wrong value for column " + testColumn.name())
+                                .isEqualTo(expectedValue);
                     }
                 }
             }
         }
-        finally {
-            pageSource.close();
-        }
     }
 
-    public static final class TestColumn
+    public record TestColumn(
+            String name,
+            Type type,
+            String baseName,
+            Type baseType,
+            boolean dereference,
+            Object writeValue,
+            Object expectedValue,
+            boolean partitionKey)
     {
-        private final String baseName;
-        private final ObjectInspector baseObjectInspector;
-        private final List<String> dereferenceNames;
-        private final List<Integer> dereferenceIndices;
-        private final String name;
-        private final ObjectInspector objectInspector;
-        private final Object writeValue;
-        private final Object expectedValue;
-        private final boolean partitionKey;
-
-        public TestColumn(String name, ObjectInspector objectInspector, Object writeValue, Object expectedValue)
+        public TestColumn(String name, Type type, Object writeValue, Object expectedValue)
         {
-            this(name, objectInspector, writeValue, expectedValue, false);
+            this(name, type, writeValue, expectedValue, false);
         }
 
-        public TestColumn(String name, ObjectInspector objectInspector, Object writeValue, Object expectedValue, boolean partitionKey)
+        public TestColumn(String name, Type type, Object writeValue, Object expectedValue, boolean partitionKey)
         {
-            this(name, objectInspector, ImmutableList.of(), ImmutableList.of(), objectInspector, writeValue, expectedValue, partitionKey);
+            this(name, type, name, type, false, writeValue, expectedValue, partitionKey);
         }
 
-        public TestColumn(
-                String baseName,
-                ObjectInspector baseObjectInspector,
-                List<String> dereferenceNames,
-                List<Integer> dereferenceIndices,
-                ObjectInspector objectInspector,
-                Object writeValue,
-                Object expectedValue,
-                boolean partitionKey)
+        public TestColumn
         {
-            this.baseName = requireNonNull(baseName, "baseName is null");
-            this.baseObjectInspector = requireNonNull(baseObjectInspector, "baseObjectInspector is null");
-            this.dereferenceNames = requireNonNull(dereferenceNames, "dereferenceNames is null");
-            this.dereferenceIndices = requireNonNull(dereferenceIndices, "dereferenceIndices is null");
-            checkArgument(dereferenceIndices.size() == dereferenceNames.size(), "dereferenceIndices and dereferenceNames should have the same size");
-            this.name = baseName + generatePartialName(dereferenceNames);
-            this.objectInspector = requireNonNull(objectInspector, "objectInspector is null");
-            this.writeValue = writeValue;
-            this.expectedValue = expectedValue;
-            this.partitionKey = partitionKey;
-            checkArgument(dereferenceNames.size() == 0 || partitionKey == false, "partial column cannot be a partition key");
+            requireNonNull(name, "name is null");
+            requireNonNull(type, "type is null");
+            requireNonNull(baseName, "baseName is null");
+            requireNonNull(baseType, "baseType is null");
         }
 
-        public String getName()
+        public HiveColumnHandle toHiveColumnHandle(int columnIndex)
         {
-            return name;
+            checkArgument(partitionKey == (columnIndex == -1));
+
+            if (!dereference) {
+                return createBaseColumn(name, columnIndex, toHiveType(type), type, partitionKey ? PARTITION_KEY : REGULAR, Optional.empty());
+            }
+
+            return new HiveColumnHandle(
+                    baseName,
+                    columnIndex,
+                    toHiveType(baseType),
+                    baseType,
+                    Optional.of(new HiveColumnProjectionInfo(ImmutableList.of(0), ImmutableList.of(name), toHiveType(type), type)),
+                    partitionKey ? PARTITION_KEY : REGULAR,
+                    Optional.empty());
         }
 
-        public String getBaseName()
+        public TestColumn withDereferenceFirstField(Object writeValue, Object expectedValue)
         {
-            return baseName;
+            verify(!partitionKey, "dereference not supported for partition key");
+            verify(!dereference, "already dereference");
+            if (!(type instanceof RowType rowType)) {
+                throw new VerifyException("type is not a row type");
+            }
+
+            RowType.Field field = rowType.getFields().get(0);
+            return new TestColumn(
+                    field.getName().orElseThrow(),
+                    field.getType(),
+                    name,
+                    type,
+                    true,
+                    writeValue,
+                    expectedValue,
+                    false);
         }
 
-        public List<String> getDereferenceNames()
+        public TestColumn withName(String newName)
         {
-            return dereferenceNames;
-        }
-
-        public List<Integer> getDereferenceIndices()
-        {
-            return dereferenceIndices;
-        }
-
-        public String getType()
-        {
-            return objectInspector.getTypeName();
-        }
-
-        public ObjectInspector getBaseObjectInspector()
-        {
-            return baseObjectInspector;
-        }
-
-        public ObjectInspector getObjectInspector()
-        {
-            return objectInspector;
-        }
-
-        public Object getWriteValue()
-        {
-            return writeValue;
-        }
-
-        public Object getExpectedValue()
-        {
-            return expectedValue;
-        }
-
-        public boolean isPartitionKey()
-        {
-            return partitionKey;
-        }
-
-        @Override
-        public String toString()
-        {
-            StringBuilder sb = new StringBuilder("TestColumn{");
-            sb.append("baseName='").append(baseName).append("'");
-            sb.append("dereferenceNames=").append("[").append(dereferenceNames.stream().collect(Collectors.joining(","))).append("]");
-            sb.append("name=").append(name);
-            sb.append(", objectInspector=").append(objectInspector);
-            sb.append(", writeValue=").append(writeValue);
-            sb.append(", expectedValue=").append(expectedValue);
-            sb.append(", partitionKey=").append(partitionKey);
-            sb.append('}');
-            return sb.toString();
+            return new TestColumn(
+                    newName,
+                    type,
+                    baseName,
+                    baseType,
+                    dereference,
+                    writeValue,
+                    expectedValue,
+                    partitionKey);
         }
     }
 }

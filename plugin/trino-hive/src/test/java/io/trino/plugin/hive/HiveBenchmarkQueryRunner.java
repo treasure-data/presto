@@ -76,7 +76,7 @@ public final class HiveBenchmarkQueryRunner
 
         Map<String, String> hiveCatalogConfig = ImmutableMap.of("hive.max-split-size", "10GB");
 
-        localQueryRunner.createCatalog("hive", new TestingHiveConnectorFactory(metastore), hiveCatalogConfig);
+        localQueryRunner.createCatalog("hive", new TestingHiveConnectorFactory(hiveDir.toPath(), Optional.of(metastore)), hiveCatalogConfig);
 
         localQueryRunner.execute("CREATE TABLE orders AS SELECT * FROM tpch.sf1.orders");
         localQueryRunner.execute("CREATE TABLE lineitem AS SELECT * FROM tpch.sf1.lineitem");

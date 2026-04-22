@@ -16,12 +16,16 @@ package io.trino.plugin.hive;
 import io.trino.plugin.hive.containers.HiveHadoop;
 import org.testng.annotations.Test;
 
+import static io.trino.testing.TestingNames.randomNameSuffix;
+
 public class TestHive3OnDataLake
         extends BaseTestHiveOnDataLake
 {
+    private static final String BUCKET_NAME = "test-hive-insert-overwrite-" + randomNameSuffix();
+
     public TestHive3OnDataLake()
     {
-        super(HiveHadoop.HIVE3_IMAGE);
+        super(BUCKET_NAME, HiveHadoop.HIVE3_IMAGE);
     }
 
     @Test

@@ -17,6 +17,7 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.apache.iceberg.FileContent;
 
+import java.util.List;
 import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
@@ -31,6 +32,7 @@ public class CommitTaskData
     private final Optional<String> partitionDataJson;
     private final FileContent content;
     private final Optional<String> referencedDataFile;
+    private final Optional<List<Long>> fileSplitOffsets;
 
     @JsonCreator
     public CommitTaskData(
@@ -41,7 +43,8 @@ public class CommitTaskData
             @JsonProperty("partitionSpecJson") String partitionSpecJson,
             @JsonProperty("partitionDataJson") Optional<String> partitionDataJson,
             @JsonProperty("content") FileContent content,
-            @JsonProperty("referencedDataFile") Optional<String> referencedDataFile)
+            @JsonProperty("referencedDataFile") Optional<String> referencedDataFile,
+            @JsonProperty("fileSplitOffsets") Optional<List<Long>> fileSplitOffsets)
     {
         this.path = requireNonNull(path, "path is null");
         this.fileFormat = requireNonNull(fileFormat, "fileFormat is null");
@@ -51,6 +54,7 @@ public class CommitTaskData
         this.partitionDataJson = requireNonNull(partitionDataJson, "partitionDataJson is null");
         this.content = requireNonNull(content, "content is null");
         this.referencedDataFile = requireNonNull(referencedDataFile, "referencedDataFile is null");
+        this.fileSplitOffsets = requireNonNull(fileSplitOffsets, "fileSplitOffsets is null");
     }
 
     @JsonProperty
@@ -99,5 +103,11 @@ public class CommitTaskData
     public Optional<String> getReferencedDataFile()
     {
         return referencedDataFile;
+    }
+
+    @JsonProperty
+    public Optional<List<Long>> getFileSplitOffsets()
+    {
+        return fileSplitOffsets;
     }
 }

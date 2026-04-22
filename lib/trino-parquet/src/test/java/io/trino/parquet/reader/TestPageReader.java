@@ -23,8 +23,10 @@ import io.trino.parquet.DataPage;
 import io.trino.parquet.DataPageV1;
 import io.trino.parquet.DataPageV2;
 import io.trino.parquet.DictionaryPage;
+import io.trino.parquet.ParquetDataSourceId;
 import io.trino.parquet.ParquetEncoding;
 import io.trino.parquet.ParquetTypeUtils;
+import io.trino.parquet.metadata.ColumnChunkMetadata;
 import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.column.EncodingStats;
 import org.apache.parquet.column.statistics.Statistics;
@@ -36,7 +38,6 @@ import org.apache.parquet.format.Encoding;
 import org.apache.parquet.format.PageHeader;
 import org.apache.parquet.format.PageType;
 import org.apache.parquet.format.Util;
-import org.apache.parquet.hadoop.metadata.ColumnChunkMetaData;
 import org.apache.parquet.hadoop.metadata.ColumnPath;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 import org.apache.parquet.schema.PrimitiveType;
@@ -394,19 +395,21 @@ public class TestPageReader
         if (hasDictionary) {
             encodingStats.addDictEncoding(PLAIN);
         }
-        ColumnChunkMetaData columnChunkMetaData = ColumnChunkMetaData.get(
+        PrimitiveType primitiveType = Types.optional(INT32).named("fake_type");
+        ColumnChunkMetadata columnChunkMetaData = ColumnChunkMetadata.get(
                 ColumnPath.get(""),
-                INT32,
+                primitiveType,
                 CompressionCodecName.fromParquet(compressionCodec),
                 encodingStats.build(),
                 ImmutableSet.of(),
-                Statistics.createStats(Types.optional(INT32).named("fake_type")),
+                Statistics.createStats(primitiveType),
                 0,
                 0,
                 valueCount,
                 0,
                 0);
         return PageReader.createPageReader(
+                new ParquetDataSourceId("test"),
                 new ChunkedInputStream(slices.stream().map(TestingChunkReader::new).collect(toImmutableList())),
                 columnChunkMetaData,
                 new ColumnDescriptor(new String[] {}, new PrimitiveType(REQUIRED, INT32, ""), 0, 0),

@@ -15,39 +15,38 @@ package io.trino.plugin.hive.metastore.thrift;
 
 import com.google.common.collect.HashMultiset;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultiset;
 import com.google.common.collect.Multiset;
+import io.trino.Session;
+import io.trino.plugin.hive.HiveQueryRunner;
 import io.trino.plugin.hive.HiveType;
-import io.trino.plugin.hive.TestingHivePlugin;
 import io.trino.plugin.hive.metastore.Column;
 import io.trino.plugin.hive.metastore.CountingAccessHiveMetastore;
-import io.trino.plugin.hive.metastore.CountingAccessHiveMetastore.Method;
 import io.trino.plugin.hive.metastore.CountingAccessHiveMetastoreUtil;
+import io.trino.plugin.hive.metastore.HivePrincipal;
+import io.trino.plugin.hive.metastore.HivePrivilegeInfo;
+import io.trino.plugin.hive.metastore.MetastoreMethod;
 import io.trino.plugin.hive.metastore.Table;
+import io.trino.plugin.hive.metastore.TableInfo;
 import io.trino.plugin.hive.metastore.UnimplementedHiveMetastore;
 import io.trino.spi.connector.SchemaTableName;
+import io.trino.spi.security.RoleGrant;
 import io.trino.testing.AbstractTestQueryFramework;
-import io.trino.testing.DataProviders;
-import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.QueryRunner;
 import org.intellij.lang.annotations.Language;
-import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.IntStream;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.trino.plugin.hive.HiveStorageFormat.ORC;
 import static io.trino.plugin.hive.TableType.MANAGED_TABLE;
-import static io.trino.plugin.hive.metastore.CountingAccessHiveMetastore.Method.GET_ALL_DATABASES;
-import static io.trino.plugin.hive.metastore.CountingAccessHiveMetastore.Method.GET_ALL_TABLES;
-import static io.trino.plugin.hive.metastore.CountingAccessHiveMetastore.Method.GET_ALL_TABLES_FROM_DATABASE;
-import static io.trino.plugin.hive.metastore.CountingAccessHiveMetastore.Method.GET_ALL_VIEWS;
-import static io.trino.plugin.hive.metastore.CountingAccessHiveMetastore.Method.GET_ALL_VIEWS_FROM_DATABASE;
-import static io.trino.plugin.hive.metastore.CountingAccessHiveMetastore.Method.GET_TABLE;
+import static io.trino.plugin.hive.metastore.MetastoreMethod.GET_ALL_DATABASES;
+import static io.trino.plugin.hive.metastore.MetastoreMethod.GET_ALL_TABLES_FROM_DATABASE;
+import static io.trino.plugin.hive.metastore.MetastoreMethod.GET_TABLE;
 import static io.trino.plugin.hive.metastore.StorageFormat.fromHiveStorageFormat;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -64,31 +63,28 @@ public class TestHiveMetastoreMetadataQueriesAccessOperations
     private MockHiveMetastore mockMetastore;
     private CountingAccessHiveMetastore metastore;
 
+    private static final Session SESSION = testSessionBuilder()
+            .setCatalog("hive")
+            .setSchema(Optional.empty())
+            .build();
+
     @Override
     protected QueryRunner createQueryRunner()
             throws Exception
     {
-        DistributedQueryRunner queryRunner = DistributedQueryRunner.builder(
-                        testSessionBuilder()
-                                .setCatalog("hive")
-                                .setSchema(Optional.empty())
-                                .build())
+        mockMetastore = new MockHiveMetastore();
+        metastore = new CountingAccessHiveMetastore(mockMetastore);
+
+        QueryRunner queryRunner = HiveQueryRunner.builder(SESSION)
                 // metadata queries do not use workers
                 .setNodeCount(1)
                 .addCoordinatorProperty("optimizer.experimental-max-prefetched-information-schema-prefixes", Integer.toString(MAX_PREFIXES_COUNT))
+                .addHiveProperty("hive.hive-views.enabled", "true")
+                .setCreateTpchSchemas(false)
+                .setMetastore(runner -> metastore)
                 .build();
 
-        mockMetastore = new MockHiveMetastore();
-        metastore = new CountingAccessHiveMetastore(mockMetastore);
-        queryRunner.installPlugin(new TestingHivePlugin(metastore));
-        queryRunner.createCatalog("hive", "hive", ImmutableMap.of());
         return queryRunner;
-    }
-
-    @BeforeMethod
-    public void resetMetastoreSetup()
-    {
-        mockMetastore.setAllTablesViewsImplemented(false);
     }
 
     @Test
@@ -112,31 +108,18 @@ public class TestHiveMetastoreMetadataQueriesAccessOperations
         assertMetastoreInvocations("SELECT * FROM system.jdbc.schemas WHERE table_schem LIKE 'test%'", ImmutableMultiset.of(GET_ALL_DATABASES));
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectTablesWithoutPredicate(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectTablesWithoutPredicate()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         assertMetastoreInvocations("SELECT * FROM information_schema.tables",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.tables",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
     }
 
@@ -153,145 +136,80 @@ public class TestHiveMetastoreMetadataQueriesAccessOperations
         assertMetastoreInvocations("SELECT * FROM information_schema.tables WHERE table_schema = 'test_schema_0'",
                 ImmutableMultiset.builder()
                         .add(GET_ALL_TABLES_FROM_DATABASE)
-                        .add(GET_ALL_VIEWS_FROM_DATABASE)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.tables WHERE table_schem = 'test_schema_0'",
                 ImmutableMultiset.builder()
                         .add(GET_ALL_TABLES_FROM_DATABASE)
-                        .add(GET_ALL_VIEWS_FROM_DATABASE)
                         .build());
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectTablesWithLikeOverSchema(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectTablesWithLikeOverSchema()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         assertMetastoreInvocations("SELECT * FROM information_schema.tables WHERE table_schema LIKE 'test%'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_DATABASES)
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.tables WHERE table_schem LIKE 'test%'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectTablesWithFilterByTableName(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectTablesWithFilterByTableName()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         assertMetastoreInvocations("SELECT * FROM information_schema.tables WHERE table_name = 'test_table_0'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_DATABASES)
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.tables WHERE table_name = 'test_table_0'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.tables WHERE table_name LIKE 'test\\_table\\_0' ESCAPE '\\'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.tables WHERE table_name LIKE 'test_table_0' ESCAPE '\\'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectTablesWithLikeOverTableName(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectTablesWithLikeOverTableName()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         assertMetastoreInvocations("SELECT * FROM information_schema.tables WHERE table_name LIKE 'test%'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_DATABASES)
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.tables WHERE table_name LIKE 'test%'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectViewsWithoutPredicate(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectViewsWithoutPredicate()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         assertMetastoreInvocations("SELECT * FROM information_schema.views",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.of(GET_ALL_VIEWS)
-                        : ImmutableMultiset.builder()
-                        .add(GET_ALL_DATABASES)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .build());
-        assertMetastoreInvocations("SELECT * FROM system.jdbc.tables WHERE table_type = 'VIEW'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
+                        .build());
+        assertMetastoreInvocations("SELECT * FROM system.jdbc.tables WHERE table_type = 'VIEW'",
+                ImmutableMultiset.builder()
+                        .add(GET_ALL_DATABASES)
+                        .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
     }
 
@@ -305,123 +223,72 @@ public class TestHiveMetastoreMetadataQueriesAccessOperations
     @Test
     public void testSelectViewsWithFilterBySchema()
     {
-        assertMetastoreInvocations("SELECT * FROM information_schema.views WHERE table_schema = 'test_schema_0'", ImmutableMultiset.of(GET_ALL_VIEWS_FROM_DATABASE));
+        assertMetastoreInvocations("SELECT * FROM information_schema.views WHERE table_schema = 'test_schema_0'", ImmutableMultiset.of(GET_ALL_TABLES_FROM_DATABASE));
         assertMetastoreInvocations("SELECT * FROM system.jdbc.tables WHERE table_type = 'VIEW' AND table_schem = 'test_schema_0'",
                 ImmutableMultiset.builder()
                         .add(GET_ALL_TABLES_FROM_DATABASE)
-                        .add(GET_ALL_VIEWS_FROM_DATABASE)
                         .build());
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectViewsWithLikeOverSchema(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectViewsWithLikeOverSchema()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         assertMetastoreInvocations("SELECT * FROM information_schema.views WHERE table_schema LIKE 'test%'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
-                        .add(GET_ALL_DATABASES)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
+                        .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.tables WHERE table_type = 'VIEW' AND table_schem LIKE 'test%'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectViewsWithFilterByTableName(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectViewsWithFilterByTableName()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         assertMetastoreInvocations("SELECT * FROM information_schema.views WHERE table_name = 'test_table_0'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
-                        .add(GET_ALL_DATABASES)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
+                        .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.tables WHERE table_type = 'VIEW' AND table_name = 'test_table_0'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectViewsWithLikeOverTableName(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectViewsWithLikeOverTableName()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
+        // mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         assertMetastoreInvocations("SELECT * FROM information_schema.views WHERE table_name LIKE 'test%'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
-                        .add(GET_ALL_DATABASES)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
+                        .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.tables WHERE table_type = 'VIEW' AND table_name LIKE 'test%'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectColumnsWithoutPredicate(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectColumnsWithoutPredicate()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         assertMetastoreInvocations("SELECT * FROM information_schema.columns",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.columns",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
                         .build());
     }
@@ -439,46 +306,33 @@ public class TestHiveMetastoreMetadataQueriesAccessOperations
         assertMetastoreInvocations("SELECT * FROM information_schema.columns WHERE table_schema = 'test_schema_0'",
                 ImmutableMultiset.builder()
                         .add(GET_ALL_TABLES_FROM_DATABASE)
-                        .add(GET_ALL_VIEWS_FROM_DATABASE)
                         .addCopies(GET_TABLE, TEST_TABLES_IN_SCHEMA_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.columns WHERE table_schem = 'test_schema_0'",
                 ImmutableMultiset.builder()
                         .add(GET_ALL_TABLES_FROM_DATABASE)
-                        .add(GET_ALL_VIEWS_FROM_DATABASE)
                         .addCopies(GET_TABLE, TEST_TABLES_IN_SCHEMA_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.columns WHERE table_schem LIKE 'test\\_schema\\_0' ESCAPE '\\'",
                 ImmutableMultiset.builder()
                         .add(GET_ALL_TABLES_FROM_DATABASE)
-                        .add(GET_ALL_VIEWS_FROM_DATABASE)
                         .addCopies(GET_TABLE, TEST_TABLES_IN_SCHEMA_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.columns WHERE table_schem LIKE 'test_schema_0' ESCAPE '\\'",
                 ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .add(GET_ALL_TABLES_FROM_DATABASE)
-                        .add(GET_ALL_VIEWS_FROM_DATABASE)
                         .addCopies(GET_TABLE, TEST_TABLES_IN_SCHEMA_COUNT)
                         .build());
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectColumnsWithLikeOverSchema(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectColumnsWithLikeOverSchema()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         assertMetastoreInvocations("SELECT * FROM information_schema.columns WHERE table_schema LIKE 'test%'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_DATABASES)
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.columns WHERE table_schem LIKE 'test%'",
@@ -489,13 +343,12 @@ public class TestHiveMetastoreMetadataQueriesAccessOperations
                         .build());
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectColumnsFilterByTableName(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectColumnsFilterByTableName()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         metastore.resetCounters();
         computeActual("SELECT * FROM information_schema.columns WHERE table_name = 'test_table_0'");
-        Multiset<Method> invocations = metastore.getMethodInvocations();
+        Multiset<MetastoreMethod> invocations = metastore.getMethodInvocations();
 
         assertThat(invocations.count(GET_TABLE)).as("GET_TABLE invocations")
                 // some lengthy explanatory comment why variable count
@@ -506,16 +359,9 @@ public class TestHiveMetastoreMetadataQueriesAccessOperations
         invocations.elementSet().remove(GET_TABLE);
 
         assertThat(invocations).as("invocations except of GET_TABLE")
-                .isEqualTo(allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_DATABASES)
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .build()
-                        : ImmutableMultiset.builder()
+                .isEqualTo(ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .build());
 
         assertMetastoreInvocations("SELECT * FROM system.jdbc.columns WHERE table_name = 'test_table_0'",
@@ -536,22 +382,13 @@ public class TestHiveMetastoreMetadataQueriesAccessOperations
                         .build());
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectColumnsWithLikeOverTableName(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectColumnsWithLikeOverTableName()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         assertMetastoreInvocations("SELECT * FROM information_schema.columns WHERE table_name LIKE 'test%'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_DATABASES)
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.columns WHERE table_name LIKE 'test%'",
@@ -562,67 +399,36 @@ public class TestHiveMetastoreMetadataQueriesAccessOperations
                         .build());
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectColumnsFilterByColumn(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectColumnsFilterByColumn()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         assertMetastoreInvocations("SELECT * FROM information_schema.columns WHERE column_name = 'name'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.columns WHERE column_name = 'name'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
                         .build());
     }
 
-    @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
-    public void testSelectColumnsWithLikeOverColumn(boolean allTablesViewsImplemented)
+    @Test
+    public void testSelectColumnsWithLikeOverColumn()
     {
-        mockMetastore.setAllTablesViewsImplemented(allTablesViewsImplemented);
         assertMetastoreInvocations("SELECT * FROM information_schema.columns WHERE column_name LIKE 'n%'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_DATABASES)
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
                         .build());
         assertMetastoreInvocations("SELECT * FROM system.jdbc.columns WHERE column_name LIKE 'n%'",
-                allTablesViewsImplemented
-                        ? ImmutableMultiset.builder()
-                        .add(GET_ALL_TABLES)
-                        .add(GET_ALL_VIEWS)
-                        .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
-                        .build()
-                        : ImmutableMultiset.builder()
+                ImmutableMultiset.builder()
                         .add(GET_ALL_DATABASES)
                         .addCopies(GET_ALL_TABLES_FROM_DATABASE, TEST_SCHEMAS_COUNT)
-                        .addCopies(GET_ALL_VIEWS_FROM_DATABASE, TEST_SCHEMAS_COUNT)
                         .addCopies(GET_TABLE, TEST_ALL_TABLES_COUNT)
                         .build());
     }
@@ -668,13 +474,11 @@ public class TestHiveMetastoreMetadataQueriesAccessOperations
             return SCHEMAS;
         }
 
-        @Override
         public List<String> getAllTables(String databaseName)
         {
             return TABLES_PER_SCHEMA;
         }
 
-        @Override
         public Optional<List<SchemaTableName>> getAllTables()
         {
             if (allTablesViewsImplemented) {
@@ -683,13 +487,11 @@ public class TestHiveMetastoreMetadataQueriesAccessOperations
             return Optional.empty();
         }
 
-        @Override
         public List<String> getAllViews(String databaseName)
         {
             return ImmutableList.of();
         }
 
-        @Override
         public Optional<List<SchemaTableName>> getAllViews()
         {
             if (allTablesViewsImplemented) {
@@ -715,9 +517,24 @@ public class TestHiveMetastoreMetadataQueriesAccessOperations
                     .build());
         }
 
-        public void setAllTablesViewsImplemented(boolean allTablesViewsImplemented)
+        @Override
+        public List<TableInfo> getTables(String databaseName)
         {
-            this.allTablesViewsImplemented = allTablesViewsImplemented;
+            return TABLES_PER_SCHEMA.stream()
+                    .map(name -> new TableInfo(new SchemaTableName(databaseName, name), TableInfo.ExtendedRelationType.TABLE))
+                    .toList();
+        }
+
+        @Override
+        public Set<HivePrivilegeInfo> listTablePrivileges(String databaseName, String tableName, Optional<String> tableOwner, Optional<HivePrincipal> prestoPrincipal)
+        {
+            return Set.of();
+        }
+
+        @Override
+        public Set<RoleGrant> listRoleGrants(HivePrincipal principal)
+        {
+            return Set.of();
         }
     }
 }

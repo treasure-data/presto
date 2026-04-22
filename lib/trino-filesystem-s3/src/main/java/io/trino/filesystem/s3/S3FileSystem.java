@@ -15,23 +15,35 @@ package io.trino.filesystem.s3;
 
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.SetMultimap;
+import io.airlift.units.Duration;
 import io.trino.filesystem.FileIterator;
 import io.trino.filesystem.Location;
 import io.trino.filesystem.TrinoFileSystem;
+import io.trino.filesystem.TrinoFileSystemException;
 import io.trino.filesystem.TrinoInputFile;
 import io.trino.filesystem.TrinoOutputFile;
+import io.trino.filesystem.UriLocation;
+import io.trino.filesystem.encryption.EncryptionKey;
+import software.amazon.awssdk.auth.signer.AwsS3V4Signer;
+import software.amazon.awssdk.awscore.AwsRequestOverrideConfiguration;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.CommonPrefix;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 import software.amazon.awssdk.services.s3.model.RequestPayer;
 import software.amazon.awssdk.services.s3.model.S3Error;
-import software.amazon.awssdk.services.s3.paginators.ListObjectsV2Iterable;
+import software.amazon.awssdk.services.s3.model.S3Object;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 
 import java.io.IOException;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -39,21 +51,35 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.Executor;
+import java.util.stream.Stream;
 
+import static com.google.common.base.Verify.verify;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.partition;
 import static com.google.common.collect.Multimaps.toMultimap;
+import static io.trino.filesystem.s3.S3FileSystemConfig.S3SseType.NONE;
+import static io.trino.filesystem.s3.S3SseCUtils.encoded;
+import static io.trino.filesystem.s3.S3SseCUtils.md5Checksum;
+import static io.trino.filesystem.s3.S3SseRequestConfigurator.setEncryptionSettings;
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.toMap;
 
 final class S3FileSystem
         implements TrinoFileSystem
 {
+    private final Executor uploadExecutor;
     private final S3Client client;
+    private final S3Presigner preSigner;
     private final S3Context context;
     private final RequestPayer requestPayer;
 
-    public S3FileSystem(S3Client client, S3Context context)
+    public S3FileSystem(Executor uploadExecutor, S3Client client, S3Presigner preSigner, S3Context context)
     {
+        this.uploadExecutor = requireNonNull(uploadExecutor, "uploadExecutor is null");
         this.client = requireNonNull(client, "client is null");
+        this.preSigner = requireNonNull(preSigner, "preSigner is null");
         this.context = requireNonNull(context, "context is null");
         this.requestPayer = context.requestPayer();
     }
@@ -61,19 +87,19 @@ final class S3FileSystem
     @Override
     public TrinoInputFile newInputFile(Location location)
     {
-        return new S3InputFile(client, context, new S3Location(location), null);
+        return new S3InputFile(client, context, new S3Location(location), null, null, Optional.empty());
     }
 
     @Override
     public TrinoInputFile newInputFile(Location location, long length)
     {
-        return new S3InputFile(client, context, new S3Location(location), length);
+        return new S3InputFile(client, context, new S3Location(location), length, null, Optional.empty());
     }
 
     @Override
     public TrinoOutputFile newOutputFile(Location location)
     {
-        return new S3OutputFile(client, context, new S3Location(location));
+        return new S3OutputFile(uploadExecutor, client, context, new S3Location(location), Optional.empty());
     }
 
     @Override
@@ -83,6 +109,7 @@ final class S3FileSystem
         location.verifyValidFileLocation();
         S3Location s3Location = new S3Location(location);
         DeleteObjectRequest request = DeleteObjectRequest.builder()
+                .overrideConfiguration(context::applyCredentialProviderOverride)
                 .requestPayer(requestPayer)
                 .key(s3Location.key())
                 .bucket(s3Location.bucket())
@@ -92,7 +119,7 @@ final class S3FileSystem
             client.deleteObject(request);
         }
         catch (SdkException e) {
-            throw new IOException("Failed to delete file: " + location, e);
+            throw new TrinoFileSystemException("Failed to delete file: " + location, e);
         }
     }
 
@@ -100,13 +127,13 @@ final class S3FileSystem
     public void deleteDirectory(Location location)
             throws IOException
     {
-        FileIterator iterator = listFiles(location);
+        FileIterator iterator = listObjects(location, true);
         while (iterator.hasNext()) {
             List<Location> files = new ArrayList<>();
             while ((files.size() < 1000) && iterator.hasNext()) {
                 files.add(iterator.next().location());
             }
-            deleteFiles(files);
+            deleteObjects(files);
         }
     }
 
@@ -115,7 +142,12 @@ final class S3FileSystem
             throws IOException
     {
         locations.forEach(Location::verifyValidFileLocation);
+        deleteObjects(locations);
+    }
 
+    private void deleteObjects(Collection<Location> locations)
+            throws IOException
+    {
         SetMultimap<String, String> bucketToKeys = locations.stream()
                 .map(S3Location::new)
                 .collect(toMultimap(S3Location::bucket, S3Location::key, HashMultimap::create));
@@ -132,8 +164,10 @@ final class S3FileSystem
                         .toList();
 
                 DeleteObjectsRequest request = DeleteObjectsRequest.builder()
+                        .overrideConfiguration(context::applyCredentialProviderOverride)
                         .requestPayer(requestPayer)
                         .bucket(bucket)
+                        .overrideConfiguration(disableStrongIntegrityChecksums())
                         .delete(builder -> builder.objects(objects).quiet(true))
                         .build();
 
@@ -144,7 +178,7 @@ final class S3FileSystem
                     }
                 }
                 catch (SdkException e) {
-                    throw new IOException("Error while batch deleting files", e);
+                    throw new TrinoFileSystemException("Error while batch deleting files", e);
                 }
             }
         }
@@ -165,6 +199,12 @@ final class S3FileSystem
     public FileIterator listFiles(Location location)
             throws IOException
     {
+        return listObjects(location, false);
+    }
+
+    private FileIterator listObjects(Location location, boolean includeDirectoryObjects)
+            throws IOException
+    {
         S3Location s3Location = new S3Location(location);
 
         String key = s3Location.key();
@@ -173,16 +213,23 @@ final class S3FileSystem
         }
 
         ListObjectsV2Request request = ListObjectsV2Request.builder()
+                .overrideConfiguration(context::applyCredentialProviderOverride)
+                // Restore status will not be added to the response without requested
+                //.optionalObjectAttributes(OptionalObjectAttributes.RESTORE_STATUS)
+                .requestPayer(requestPayer)
                 .bucket(s3Location.bucket())
                 .prefix(key)
                 .build();
 
         try {
-            ListObjectsV2Iterable iterable = client.listObjectsV2Paginator(request);
-            return new S3FileIterator(s3Location, iterable.contents().iterator());
+            Stream<S3Object> s3ObjectStream = client.listObjectsV2Paginator(request).contents().stream();
+            if (!includeDirectoryObjects) {
+                s3ObjectStream = s3ObjectStream.filter(object -> !object.key().endsWith("/"));
+            }
+            return new S3FileIterator(s3Location, s3ObjectStream.iterator());
         }
         catch (SdkException e) {
-            throw new IOException("Failed to list location: " + location, e);
+            throw new TrinoFileSystemException("Failed to list location: " + location, e);
         }
     }
 
@@ -197,9 +244,119 @@ final class S3FileSystem
         return Optional.empty();
     }
 
+    @Override
+    public void createDirectory(Location location)
+    {
+        validateS3Location(location);
+        // S3 does not have directories
+    }
+
+    @Override
+    public void renameDirectory(Location source, Location target)
+            throws IOException
+    {
+        throw new IOException("S3 does not support directory renames");
+    }
+
+    @Override
+    public Set<Location> listDirectories(Location location)
+            throws IOException
+    {
+        S3Location s3Location = new S3Location(location);
+        Location baseLocation = s3Location.baseLocation();
+
+        String key = s3Location.key();
+        if (!key.isEmpty() && !key.endsWith("/")) {
+            key += "/";
+        }
+
+        ListObjectsV2Request request = ListObjectsV2Request.builder()
+                .overrideConfiguration(context::applyCredentialProviderOverride)
+                .requestPayer(requestPayer)
+                .bucket(s3Location.bucket())
+                .prefix(key)
+                .delimiter("/")
+                .build();
+
+        try {
+            return client.listObjectsV2Paginator(request)
+                    .commonPrefixes().stream()
+                    .map(CommonPrefix::prefix)
+                    .map(baseLocation::appendPath)
+                    .collect(toImmutableSet());
+        }
+        catch (SdkException e) {
+            throw new TrinoFileSystemException("Failed to list location: " + location, e);
+        }
+    }
+
+    @Override
+    public Optional<Location> createTemporaryDirectory(Location targetPath, String temporaryPrefix, String relativePrefix)
+            throws IOException
+    {
+        validateS3Location(targetPath);
+        // S3 does not have directories
+        return Optional.empty();
+    }
+
+    public Optional<UriLocation> encryptedPreSignedUri(Location location, Duration ttl, Optional<EncryptionKey> key)
+            throws IOException
+    {
+        location.verifyValidFileLocation();
+        S3Location s3Location = new S3Location(location);
+
+        verify(key.isEmpty() || context.s3SseContext().sseType() == NONE, "Encryption key cannot be used with SSE configuration");
+
+        GetObjectRequest request = GetObjectRequest.builder()
+                .overrideConfiguration(context::applyCredentialProviderOverride)
+                .requestPayer(requestPayer)
+                .key(s3Location.key())
+                .bucket(s3Location.bucket())
+                .applyMutation(builder ->
+                    key.ifPresentOrElse(
+                            encryption ->
+                                builder.sseCustomerKeyMD5(md5Checksum(encryption))
+                                        .sseCustomerAlgorithm(encryption.algorithm())
+                                        .sseCustomerKey(encoded(encryption)),
+                            () -> setEncryptionSettings(builder, context.s3SseContext())))
+                .build();
+
+        GetObjectPresignRequest preSignRequest = GetObjectPresignRequest.builder()
+                .signatureDuration(ttl.toJavaTime())
+                .getObjectRequest(request)
+                .build();
+        try {
+            PresignedGetObjectRequest preSigned = preSigner.presignGetObject(preSignRequest);
+            return Optional.of(new UriLocation(preSigned.url().toURI(), filterHeaders(preSigned.httpRequest().headers())));
+        }
+        catch (SdkException e) {
+            throw new IOException("Failed to generate pre-signed URI", e);
+        }
+        catch (URISyntaxException e) {
+            throw new TrinoFileSystemException("Failed to convert pre-signed URI to URI", e);
+        }
+    }
+
+    private static Map<String, List<String>> filterHeaders(Map<String, List<String>> headers)
+    {
+        return headers.entrySet().stream()
+                .filter(entry -> !entry.getKey().equalsIgnoreCase("host"))
+                .collect(toMap(Entry::getKey, Entry::getValue));
+    }
+
     @SuppressWarnings("ResultOfObjectAllocationIgnored")
     private static void validateS3Location(Location location)
     {
         new S3Location(location);
+    }
+
+    // TODO (https://github.com/trinodb/trino/issues/24955):
+    // remove me once all of the S3-compatible storage support strong integrity checks
+    @SuppressWarnings("deprecation")
+    static AwsRequestOverrideConfiguration disableStrongIntegrityChecksums()
+    {
+        return AwsRequestOverrideConfiguration.builder()
+            .signer(AwsS3V4Signer.create())
+            .build();
     }
 }

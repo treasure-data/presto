@@ -31,6 +31,7 @@ import java.io.OutputStream;
 
 import static io.trino.filesystem.hdfs.HadoopPaths.hadoopPath;
 import static io.trino.hdfs.FileSystemUtils.getRawFileSystem;
+import static io.trino.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static java.util.Objects.requireNonNull;
 
 class HdfsOutputFile
@@ -54,6 +55,24 @@ class HdfsOutputFile
             throws IOException
     {
         return create(false, memoryContext);
+    }
+
+    @Override
+    public void createOrOverwrite(byte[] data)
+            throws IOException
+    {
+        try (OutputStream out = create(true, newSimpleAggregatedMemoryContext())) {
+            out.write(data);
+        }
+    }
+
+    @Override
+    public void createExclusive(byte[] data)
+            throws IOException
+    {
+        Path file = hadoopPath(location);
+        FileSystem fileSystem = getRawFileSystem(environment.getFileSystem(context, file));
+        throw new UnsupportedOperationException("createExclusive not supported for " + fileSystem);
     }
 
     @Override

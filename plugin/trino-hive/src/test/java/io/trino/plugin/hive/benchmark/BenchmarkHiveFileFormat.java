@@ -81,10 +81,10 @@ import static io.trino.type.InternalTypeManager.TESTING_TYPE_MANAGER;
 public class BenchmarkHiveFileFormat
 {
     private static final ConnectorSession SESSION = getHiveSession(
-            new HiveConfig(), new ParquetReaderConfig().setOptimizedReaderEnabled(false));
+            new HiveConfig(), new ParquetReaderConfig());
 
     private static final ConnectorSession SESSION_OPTIMIZED_PARQUET_READER = getHiveSession(
-            new HiveConfig(), new ParquetReaderConfig().setOptimizedReaderEnabled(true));
+            new HiveConfig(), new ParquetReaderConfig());
 
     static {
         HadoopNative.requireHadoopNative();

@@ -25,7 +25,7 @@ import java.io.File;
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static io.trino.plugin.deltalake.DeltaLakeConnectorFactory.CONNECTOR_NAME;
-import static io.trino.plugin.hive.metastore.glue.GlueHiveMetastore.createTestingGlueHiveMetastore;
+import static io.trino.plugin.hive.metastore.glue.TestingGlueHiveMetastore.createTestingGlueHiveMetastore;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 
 public class TestDeltaLakeTableWithCustomLocationUsingGlueMetastore
@@ -57,7 +57,7 @@ public class TestDeltaLakeTableWithCustomLocationUsingGlueMetastore
                         .put("hive.metastore.glue.default-warehouse-dir", metastoreDir.toURI().toString())
                         .buildOrThrow());
 
-        metastore = createTestingGlueHiveMetastore(metastoreDir.toPath());
+        metastore = createTestingGlueHiveMetastore(metastoreDir.toPath(), this::closeAfterClass);
 
         queryRunner.execute("CREATE SCHEMA " + SCHEMA + " WITH (location = '" + metastoreDir.toURI() + "')");
         return queryRunner;

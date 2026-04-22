@@ -54,7 +54,7 @@ public class TestNestedColumnReader
                         descriptor.getMaxRepetitionLevel(),
                         descriptor.getMaxDefinitionLevel()),
                 field.getId());
-        ColumnReaderFactory columnReaderFactory = new ColumnReaderFactory(UTC, new ParquetReaderOptions().withBatchColumnReaders(true).withBatchNestedColumnReaders(true));
+        ColumnReaderFactory columnReaderFactory = new ColumnReaderFactory(UTC, new ParquetReaderOptions());
         ColumnReader columnReader = columnReaderFactory.create(tesingField, newSimpleAggregatedMemoryContext());
         assertThat(columnReader).isInstanceOf(NestedColumnReader.class);
         return columnReader;

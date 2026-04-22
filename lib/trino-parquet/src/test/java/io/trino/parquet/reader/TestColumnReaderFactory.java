@@ -30,41 +30,30 @@ import static org.joda.time.DateTimeZone.UTC;
 public class TestColumnReaderFactory
 {
     @Test
-    public void testUseBatchedColumnReaders()
+    public void testTopLevelPrimitiveFields()
     {
-        PrimitiveField field = new PrimitiveField(
+        ColumnReaderFactory columnReaderFactory = new ColumnReaderFactory(UTC, new ParquetReaderOptions());
+        PrimitiveType primitiveType = new PrimitiveType(OPTIONAL, INT32, "test");
+
+        PrimitiveField topLevelRepeatedPrimitiveField = new PrimitiveField(
+                INTEGER,
+                true,
+                new ColumnDescriptor(new String[] {"topLevelRepeatedPrimitiveField test"}, primitiveType, 1, 1),
+                0);
+        assertThat(columnReaderFactory.create(topLevelRepeatedPrimitiveField, newSimpleAggregatedMemoryContext())).isInstanceOf(NestedColumnReader.class);
+
+        PrimitiveField topLevelOptionalPrimitiveField = new PrimitiveField(
                 INTEGER,
                 false,
-                new ColumnDescriptor(new String[] {"test"}, new PrimitiveType(OPTIONAL, INT32, "test"), 0, 1),
+                new ColumnDescriptor(new String[] {"topLevelRequiredPrimitiveField test"}, primitiveType, 0, 1),
                 0);
-        ColumnReaderFactory columnReaderFactory = new ColumnReaderFactory(UTC, new ParquetReaderOptions().withBatchColumnReaders(false));
-        assertThat(columnReaderFactory.create(field, newSimpleAggregatedMemoryContext()))
-                .isNotInstanceOf(AbstractColumnReader.class);
-        columnReaderFactory = new ColumnReaderFactory(UTC, new ParquetReaderOptions().withBatchColumnReaders(true));
-        assertThat(columnReaderFactory.create(field, newSimpleAggregatedMemoryContext()))
-                .isInstanceOf(FlatColumnReader.class);
-    }
+        assertThat(columnReaderFactory.create(topLevelOptionalPrimitiveField, newSimpleAggregatedMemoryContext())).isInstanceOf(FlatColumnReader.class);
 
-    @Test
-    public void testNestedColumnReaders()
-    {
-        PrimitiveField field = new PrimitiveField(
+        PrimitiveField topLevelRequiredPrimitiveField = new PrimitiveField(
                 INTEGER,
-                false,
-                new ColumnDescriptor(new String[] {"level1", "level2"}, new PrimitiveType(OPTIONAL, INT32, "test"), 1, 2),
+                true,
+                new ColumnDescriptor(new String[] {"topLevelRequiredPrimitiveField test"}, primitiveType, 0, 0),
                 0);
-        ColumnReaderFactory columnReaderFactory = new ColumnReaderFactory(UTC, new ParquetReaderOptions().withBatchColumnReaders(false));
-        assertThat(columnReaderFactory.create(field, newSimpleAggregatedMemoryContext()))
-                .isNotInstanceOf(AbstractColumnReader.class);
-        columnReaderFactory = new ColumnReaderFactory(UTC, new ParquetReaderOptions().withBatchColumnReaders(false).withBatchNestedColumnReaders(true));
-        assertThat(columnReaderFactory.create(field, newSimpleAggregatedMemoryContext()))
-                .isNotInstanceOf(AbstractColumnReader.class);
-
-        columnReaderFactory = new ColumnReaderFactory(UTC, new ParquetReaderOptions().withBatchColumnReaders(true));
-        assertThat(columnReaderFactory.create(field, newSimpleAggregatedMemoryContext()))
-                .isInstanceOf(NestedColumnReader.class);
-        columnReaderFactory = new ColumnReaderFactory(UTC, new ParquetReaderOptions().withBatchColumnReaders(true).withBatchNestedColumnReaders(true));
-        assertThat(columnReaderFactory.create(field, newSimpleAggregatedMemoryContext()))
-                .isInstanceOf(NestedColumnReader.class);
+        assertThat(columnReaderFactory.create(topLevelRequiredPrimitiveField, newSimpleAggregatedMemoryContext())).isInstanceOf(FlatColumnReader.class);
     }
 }

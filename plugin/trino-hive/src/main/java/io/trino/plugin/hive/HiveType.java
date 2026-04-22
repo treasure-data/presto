@@ -308,6 +308,11 @@ public final class HiveType
         return dereferenceNames.build();
     }
 
+    public static HiveType fromTypeInfo(TypeInfo typeInfo)
+    {
+        return new HiveType(typeInfo);
+    }
+
     public long getRetainedSizeInBytes()
     {
         return INSTANCE_SIZE + hiveTypeName.getEstimatedSizeInBytes() + typeInfo.getRetainedSizeInBytes();

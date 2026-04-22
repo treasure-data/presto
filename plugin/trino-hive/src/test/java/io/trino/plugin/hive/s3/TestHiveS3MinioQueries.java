@@ -14,59 +14,37 @@
 package io.trino.plugin.hive.s3;
 
 import com.google.common.collect.ImmutableMap;
-import io.trino.plugin.hive.HiveQueryRunner;
-import io.trino.plugin.hive.NodeVersion;
-import io.trino.plugin.hive.metastore.HiveMetastoreConfig;
-import io.trino.plugin.hive.metastore.file.FileHiveMetastore;
-import io.trino.plugin.hive.metastore.file.FileHiveMetastoreConfig;
+import io.trino.plugin.hive.containers.Hive3MinioDataLake;
 import io.trino.testing.AbstractTestQueryFramework;
 import io.trino.testing.DataProviders;
 import io.trino.testing.QueryRunner;
-import io.trino.testing.containers.Minio;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.Test;
 
-import java.io.File;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static com.google.common.base.Verify.verify;
-import static io.trino.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
 import static io.trino.testing.TestingNames.randomNameSuffix;
-import static io.trino.testing.containers.Minio.MINIO_ACCESS_KEY;
-import static io.trino.testing.containers.Minio.MINIO_SECRET_KEY;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestHiveS3MinioQueries
         extends AbstractTestQueryFramework
 {
-    private Minio minio;
+    private Hive3MinioDataLake hiveMinioDataLake;
+    private String bucketName;
 
     @Override
     protected QueryRunner createQueryRunner()
             throws Exception
     {
-        minio = closeAfterClass(Minio.builder().build());
-        minio.start();
+        this.bucketName = "test-hive-minio-queries-" + randomNameSuffix();
+        this.hiveMinioDataLake = closeAfterClass(new Hive3MinioDataLake(bucketName));
+        this.hiveMinioDataLake.start();
 
-        return HiveQueryRunner.builder()
-                .setMetastore(queryRunner -> {
-                    File baseDir = queryRunner.getCoordinator().getBaseDataDir().resolve("hive_data").toFile();
-                    return new FileHiveMetastore(
-                            new NodeVersion("testversion"),
-                            HDFS_ENVIRONMENT,
-                            new HiveMetastoreConfig().isHideDeltaLakeTables(),
-                            new FileHiveMetastoreConfig()
-                                    .setCatalogDirectory(baseDir.toURI().toString())
-                                    .setDisableLocationChecks(true) // matches Glue behavior
-                                    .setMetastoreUser("test"));
-                })
+        return S3HiveQueryRunner.builder(hiveMinioDataLake)
                 .setHiveProperties(ImmutableMap.<String, String>builder()
-                        .put("hive.s3.aws-access-key", MINIO_ACCESS_KEY)
-                        .put("hive.s3.aws-secret-key", MINIO_SECRET_KEY)
-                        .put("hive.s3.endpoint", minio.getMinioAddress())
-                        .put("hive.s3.path-style-access", "true")
                         .put("hive.non-managed-table-writes-enabled", "true")
                         .buildOrThrow())
                 .build();
@@ -75,15 +53,14 @@ public class TestHiveS3MinioQueries
     @AfterClass(alwaysRun = true)
     public void cleanUp()
     {
-        minio = null; // closed by closeAfterClass
     }
 
     @Test(dataProviderClass = DataProviders.class, dataProvider = "trueFalse")
     public void testTableLocationTopOfTheBucket(boolean locationWithTrailingSlash)
     {
         String bucketName = "test-bucket-" + randomNameSuffix();
-        minio.createBucket(bucketName);
-        minio.writeFile("We are\nawesome at\nmultiple slashes.".getBytes(UTF_8), bucketName, "a_file");
+        hiveMinioDataLake.getMinio().createBucket(bucketName);
+        hiveMinioDataLake.getMinio().writeFile("We are\nawesome at\nmultiple slashes.".getBytes(UTF_8), bucketName, "a_file");
 
         String location = "s3://%s%s".formatted(bucketName, locationWithTrailingSlash ? "/" : "");
         String tableName = "test_table_top_of_bucket_%s_%s".formatted(locationWithTrailingSlash, randomNameSuffix());

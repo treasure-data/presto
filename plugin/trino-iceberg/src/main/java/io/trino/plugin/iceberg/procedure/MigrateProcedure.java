@@ -246,7 +246,7 @@ public class MigrateProcedure
                     schema,
                     parsePartitionFields(schema, toPartitionFields(hiveTable)),
                     unsorted(),
-                    location,
+                    Optional.of(location),
                     properties);
 
             List<DataFile> dataFiles = dataFilesBuilder.build();
@@ -262,7 +262,7 @@ public class MigrateProcedure
                     .setParameter(METADATA_LOCATION_PROP, location)
                     .setParameter(TABLE_TYPE_PROP, ICEBERG_TABLE_TYPE_VALUE.toUpperCase(ENGLISH))
                     .build();
-            metastore.replaceTable(schemaName, tableName, newTable, principalPrivileges);
+            metastore.replaceTable(schemaName, tableName, newTable, principalPrivileges, ImmutableMap.of());
 
             transaction.commitTransaction();
             log.debug("Successfully migrated %s table to Iceberg format", sourceTableName);

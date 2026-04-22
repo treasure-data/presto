@@ -16,7 +16,7 @@ package io.trino.plugin.iceberg.procedure;
 import static com.google.common.base.MoreObjects.toStringHelper;
 
 public class IcebergDropExtendedStatsHandle
-        extends IcebergProcedureHandle
+        implements IcebergProcedureHandle
 {
     @Override
     public String toString()

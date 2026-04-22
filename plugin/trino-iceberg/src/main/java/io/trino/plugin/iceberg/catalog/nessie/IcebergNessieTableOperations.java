@@ -97,7 +97,8 @@ public class IcebergNessieTableOperations
     {
         verify(version.isEmpty(), "commitNewTable called on a table which already exists");
         try {
-            nessieClient.commitTable(null, metadata, writeNewMetadata(metadata, 0), table, toKey(new SchemaTableName(database, this.tableName)));
+            String contentId = table == null ? null : table.getId();
+            nessieClient.commitTable(null, metadata, writeNewMetadata(metadata, 0), contentId, toKey(new SchemaTableName(database, this.tableName)));
         }
         catch (NessieNotFoundException e) {
             throw new TrinoException(ICEBERG_COMMIT_ERROR, format("Cannot commit: ref '%s' no longer exists", nessieClient.refName()), e);
@@ -114,7 +115,7 @@ public class IcebergNessieTableOperations
     {
         verify(version.orElseThrow() >= 0, "commitToExistingTable called on a new table");
         try {
-            nessieClient.commitTable(base, metadata, writeNewMetadata(metadata, version.getAsInt() + 1), table, toKey(new SchemaTableName(database, this.tableName)));
+            nessieClient.commitTable(base, metadata, writeNewMetadata(metadata, version.getAsInt() + 1), table.getId(), toKey(new SchemaTableName(database, this.tableName)));
         }
         catch (NessieNotFoundException e) {
             throw new TrinoException(ICEBERG_COMMIT_ERROR, format("Cannot commit: ref '%s' no longer exists", nessieClient.refName()), e);
@@ -124,6 +125,12 @@ public class IcebergNessieTableOperations
             throw new CommitFailedException(e, "Cannot commit: ref hash is out of date. Update the ref '%s' and try again", nessieClient.refName());
         }
         shouldRefresh = true;
+    }
+
+    @Override
+    protected void commitMaterializedViewRefresh(TableMetadata base, TableMetadata metadata)
+    {
+        throw new UnsupportedOperationException();
     }
 
     private static ContentKey toKey(SchemaTableName tableName)

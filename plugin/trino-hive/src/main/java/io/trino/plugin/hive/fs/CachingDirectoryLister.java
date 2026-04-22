@@ -13,7 +13,6 @@
  */
 package io.trino.plugin.hive.fs;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.cache.Cache;
 import com.google.common.cache.Weigher;
 import com.google.common.collect.ImmutableList;
@@ -21,6 +20,7 @@ import com.google.inject.Inject;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.trino.cache.EvictableCacheBuilder;
+import io.trino.filesystem.FileEntry;
 import io.trino.filesystem.Location;
 import io.trino.filesystem.TrinoFileSystem;
 import io.trino.plugin.hive.HiveConfig;
@@ -36,6 +36,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -53,14 +54,15 @@ public class CachingDirectoryLister
     // to deal more efficiently with cache invalidation scenarios for partitioned tables.
     private final Cache<Location, ValueHolder> cache;
     private final List<SchemaTablePrefix> tablePrefixes;
+    private final Predicate<FileEntry> filterPredicate;
 
     @Inject
     public CachingDirectoryLister(HiveConfig hiveClientConfig)
     {
-        this(hiveClientConfig.getFileStatusCacheExpireAfterWrite(), hiveClientConfig.getFileStatusCacheMaxRetainedSize(), hiveClientConfig.getFileStatusCacheTables());
+        this(hiveClientConfig.getFileStatusCacheExpireAfterWrite(), hiveClientConfig.getFileStatusCacheMaxRetainedSize(), hiveClientConfig.getFileStatusCacheTables(), hiveClientConfig.getS3StorageClassFilter().toFileEntryPredicate());
     }
 
-    public CachingDirectoryLister(Duration expireAfterWrite, DataSize maxSize, List<String> tables)
+    public CachingDirectoryLister(Duration expireAfterWrite, DataSize maxSize, List<String> tables, Predicate<FileEntry> filterPredicate)
     {
         this.cache = EvictableCacheBuilder.newBuilder()
                 .maximumWeight(maxSize.toBytes())
@@ -72,6 +74,7 @@ public class CachingDirectoryLister
         this.tablePrefixes = tables.stream()
                 .map(CachingDirectoryLister::parseTableName)
                 .collect(toImmutableList());
+        this.filterPredicate = filterPredicate;
     }
 
     private static SchemaTablePrefix parseTableName(String tableName)
@@ -205,8 +208,8 @@ public class CachingDirectoryLister
         return cache.stats().requestCount();
     }
 
-    @VisibleForTesting
-    boolean isCached(Location location)
+    @Override
+    public boolean isCached(Location location)
     {
         ValueHolder cached = cache.getIfPresent(location);
         return cached != null && cached.getFiles().isPresent();

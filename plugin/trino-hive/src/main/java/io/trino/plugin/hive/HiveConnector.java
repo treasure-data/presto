@@ -29,7 +29,6 @@ import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorSplitManager;
 import io.trino.spi.connector.ConnectorTransactionHandle;
 import io.trino.spi.connector.TableProcedureMetadata;
-import io.trino.spi.eventlistener.EventListener;
 import io.trino.spi.procedure.Procedure;
 import io.trino.spi.session.PropertyMetadata;
 import io.trino.spi.transaction.IsolationLevel;
@@ -55,13 +54,11 @@ public class HiveConnector
     private final ConnectorNodePartitioningProvider nodePartitioningProvider;
     private final Set<Procedure> procedures;
     private final Set<TableProcedureMetadata> tableProcedures;
-    private final Set<EventListener> eventListeners;
     private final List<PropertyMetadata<?>> sessionProperties;
     private final List<PropertyMetadata<?>> schemaProperties;
     private final List<PropertyMetadata<?>> tableProperties;
     private final List<PropertyMetadata<?>> columnProperties;
     private final List<PropertyMetadata<?>> analyzeProperties;
-    private final List<PropertyMetadata<?>> materializedViewProperties;
 
     private final Optional<ConnectorAccessControl> accessControl;
     private final ClassLoader classLoader;
@@ -79,13 +76,11 @@ public class HiveConnector
             ConnectorNodePartitioningProvider nodePartitioningProvider,
             Set<Procedure> procedures,
             Set<TableProcedureMetadata> tableProcedures,
-            Set<EventListener> eventListeners,
             Set<SessionPropertiesProvider> sessionPropertiesProviders,
             List<PropertyMetadata<?>> schemaProperties,
             List<PropertyMetadata<?>> tableProperties,
             List<PropertyMetadata<?>> columnProperties,
             List<PropertyMetadata<?>> analyzeProperties,
-            List<PropertyMetadata<?>> materializedViewProperties,
             Optional<ConnectorAccessControl> accessControl,
             boolean singleStatementWritesOnly,
             ClassLoader classLoader)
@@ -99,7 +94,6 @@ public class HiveConnector
         this.nodePartitioningProvider = requireNonNull(nodePartitioningProvider, "nodePartitioningProvider is null");
         this.procedures = ImmutableSet.copyOf(requireNonNull(procedures, "procedures is null"));
         this.tableProcedures = ImmutableSet.copyOf(requireNonNull(tableProcedures, "tableProcedures is null"));
-        this.eventListeners = ImmutableSet.copyOf(requireNonNull(eventListeners, "eventListeners is null"));
         this.sessionProperties = sessionPropertiesProviders.stream()
                 .flatMap(sessionPropertiesProvider -> sessionPropertiesProvider.getSessionProperties().stream())
                 .collect(toImmutableList());
@@ -107,7 +101,6 @@ public class HiveConnector
         this.tableProperties = ImmutableList.copyOf(requireNonNull(tableProperties, "tableProperties is null"));
         this.columnProperties = ImmutableList.copyOf(requireNonNull(columnProperties, "columnProperties is null"));
         this.analyzeProperties = ImmutableList.copyOf(requireNonNull(analyzeProperties, "analyzeProperties is null"));
-        this.materializedViewProperties = requireNonNull(materializedViewProperties, "materializedViewProperties is null");
         this.accessControl = requireNonNull(accessControl, "accessControl is null");
         this.singleStatementWritesOnly = singleStatementWritesOnly;
         this.classLoader = requireNonNull(classLoader, "classLoader is null");
@@ -179,18 +172,6 @@ public class HiveConnector
     public List<PropertyMetadata<?>> getColumnProperties()
     {
         return this.columnProperties;
-    }
-
-    @Override
-    public List<PropertyMetadata<?>> getMaterializedViewProperties()
-    {
-        return materializedViewProperties;
-    }
-
-    @Override
-    public Iterable<EventListener> getEventListeners()
-    {
-        return eventListeners;
     }
 
     @Override

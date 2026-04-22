@@ -60,6 +60,11 @@ public class PartitionStatistics
         return columnStatistics;
     }
 
+    public PartitionStatistics withBasicStatistics(HiveBasicStatistics basicStatistics)
+    {
+        return new PartitionStatistics(basicStatistics, columnStatistics);
+    }
+
     @Override
     public boolean equals(Object o)
     {

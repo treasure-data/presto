@@ -408,4 +408,39 @@ public final class PlainValueDecoders
             input.skip(n * typeLength);
         }
     }
+
+    private abstract static class AbstractBooleanPlainValueDecoder
+            implements ValueDecoder<byte[]>
+    {
+        protected SimpleSliceInputStream input;
+        // Number of unread bits in the current byte
+        protected int alreadyReadBits;
+        // Partly read byte
+        protected byte partiallyReadByte;
+
+        @Override
+        public void init(SimpleSliceInputStream input)
+        {
+            this.input = requireNonNull(input, "input is null");
+            alreadyReadBits = 0;
+        }
+
+        @Override
+        public void skip(int n)
+        {
+            if (alreadyReadBits != 0) { // Skip the partially read byte
+                int chunkSize = min(Byte.SIZE - alreadyReadBits, n);
+                n -= chunkSize;
+                alreadyReadBits = (alreadyReadBits + chunkSize) % Byte.SIZE; // Set to 0 when full byte reached
+            }
+
+            // Skip full bytes
+            input.skip(n / Byte.SIZE);
+
+            if (n % Byte.SIZE != 0) { // Partially skip the last byte
+                alreadyReadBits = n % Byte.SIZE;
+                partiallyReadByte = input.readByte();
+            }
+        }
+    }
 }

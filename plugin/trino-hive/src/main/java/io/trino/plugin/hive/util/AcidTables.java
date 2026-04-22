@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Properties;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Multimaps.asMap;
@@ -56,13 +57,29 @@ public final class AcidTables
         return "insert_only".equalsIgnoreCase(parameters.get(TABLE_TRANSACTIONAL_PROPERTIES));
     }
 
+    public static boolean isInsertOnlyTable(Properties parameters)
+    {
+        return "insert_only".equalsIgnoreCase(parameters.getProperty(TABLE_TRANSACTIONAL_PROPERTIES));
+    }
+
     public static boolean isTransactionalTable(Map<String, String> parameters)
     {
         return "true".equalsIgnoreCase(parameters.get(TABLE_IS_TRANSACTIONAL)) ||
                 "true".equalsIgnoreCase(parameters.get(TABLE_IS_TRANSACTIONAL.toUpperCase(ENGLISH)));
     }
 
+    public static boolean isTransactionalTable(Properties parameters)
+    {
+        return "true".equalsIgnoreCase(parameters.getProperty(TABLE_IS_TRANSACTIONAL)) ||
+                "true".equalsIgnoreCase(parameters.getProperty(TABLE_IS_TRANSACTIONAL.toUpperCase(ENGLISH)));
+    }
+
     public static boolean isFullAcidTable(Map<String, String> parameters)
+    {
+        return isTransactionalTable(parameters) && !isInsertOnlyTable(parameters);
+    }
+
+    public static boolean isFullAcidTable(Properties parameters)
     {
         return isTransactionalTable(parameters) && !isInsertOnlyTable(parameters);
     }

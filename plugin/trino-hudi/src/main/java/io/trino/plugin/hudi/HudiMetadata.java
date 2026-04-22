@@ -22,6 +22,7 @@ import io.trino.plugin.hive.HiveColumnHandle;
 import io.trino.plugin.hive.metastore.Column;
 import io.trino.plugin.hive.metastore.HiveMetastore;
 import io.trino.plugin.hive.metastore.Table;
+import io.trino.plugin.hive.metastore.TableInfo;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ColumnMetadata;
@@ -204,8 +205,8 @@ public class HudiMetadata
     {
         ImmutableList.Builder<SchemaTableName> tableNames = ImmutableList.builder();
         for (String schemaName : listSchemas(session, optionalSchemaName)) {
-            for (String tableName : metastore.getAllTables(schemaName)) {
-                tableNames.add(new SchemaTableName(schemaName, tableName));
+            for (TableInfo tableInfo : metastore.getTables(schemaName)) {
+                tableNames.add(tableInfo.tableName());
             }
         }
         return tableNames.build();

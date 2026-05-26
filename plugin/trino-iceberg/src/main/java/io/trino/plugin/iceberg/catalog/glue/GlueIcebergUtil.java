@@ -67,6 +67,7 @@ public final class GlueIcebergUtil
             String tableName,
             Optional<String> owner,
             TableMetadata metadata,
+            String tableLocation,
             String newMetadataLocation,
             Map<String, String> parameters,
             boolean cacheTableMetadata)
@@ -76,11 +77,14 @@ public final class GlueIcebergUtil
         parameters.put(METADATA_LOCATION_PROP, newMetadataLocation);
         parameters.remove(TRINO_TABLE_METADATA_INFO_VALID_FOR); // no longer valid
 
+        StorageDescriptor storageDescriptor = new StorageDescriptor().withLocation(tableLocation);
+
         TableInput tableInput = new TableInput()
                 .withName(tableName)
                 .withOwner(owner.orElse(null))
                 // Iceberg does not distinguish managed and external tables, all tables are treated the same and marked as EXTERNAL
-                .withTableType(EXTERNAL_TABLE.name());
+                .withTableType(EXTERNAL_TABLE.name())
+                .withStorageDescriptor(storageDescriptor);
 
         if (cacheTableMetadata) {
             // Store table metadata sufficient to answer information_schema.columns and system.metadata.table_comments queries, which are often queried in bulk by e.g. BI tools
@@ -92,8 +96,7 @@ public final class GlueIcebergUtil
             boolean canPersistMetadata = canPersistComment && canPersistColumnInfo;
 
             if (canPersistMetadata) {
-                tableInput.withStorageDescriptor(new StorageDescriptor()
-                        .withColumns(glueColumns.get()));
+                tableInput.withStorageDescriptor(storageDescriptor.withColumns(glueColumns.get()));
 
                 if (comment != null) {
                     parameters.put(TABLE_COMMENT, comment);

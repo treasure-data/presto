@@ -708,6 +708,7 @@ public class TrinoGlueCatalog
                 schemaTableName.getTableName(),
                 Optional.of(session.getUser()),
                 tableMetadata,
+                tableMetadata.location(),
                 tableMetadata.metadataFileLocation(),
                 ImmutableMap.of(),
                 cacheTableMetadata);
@@ -756,6 +757,7 @@ public class TrinoGlueCatalog
                     to.getTableName(),
                     Optional.ofNullable(table.getOwner()),
                     metadata,
+                    table.getStorageDescriptor().getLocation(),
                     metadataLocation,
                     tableParameters,
                     cacheTableMetadata);

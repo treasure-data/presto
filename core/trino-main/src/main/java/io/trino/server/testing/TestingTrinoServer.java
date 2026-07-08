@@ -250,6 +250,7 @@ public class TestingTrinoServer
             Map<String, String> properties,
             Optional<String> environment,
             Module additionalModule,
+            Module sessionSupplierModule,
             Optional<Path> baseDataDir,
             Optional<SpanProcessor> spanProcessor,
             Optional<FactoryConfiguration> systemAccessControlConfiguration,
@@ -350,11 +351,13 @@ public class TestingTrinoServer
                                     millis -> Instant.parse((String) millis),
                                     Instant::toString)));
                     if (coordinator) {
-                        binder.bind(QuerySessionSupplier.class).in(Scopes.SINGLETON);
                         newOptionalBinder(binder, SessionSupplier.class).setBinding().to(TestingSessionSupplier.class).in(Scopes.SINGLETON);
                     }
                 });
 
+        if (coordinator) {
+            modules.add(sessionSupplierModule);
+        }
         modules.add(additionalModule);
 
         Bootstrap app = new Bootstrap("io.trino.bootstrap.engine", modules.build());
@@ -733,6 +736,7 @@ public class TestingTrinoServer
         private Map<String, String> properties = ImmutableMap.of();
         private Optional<String> environment = Optional.empty();
         private Module additionalModule = EMPTY_MODULE;
+        private Module sessionSupplierModule = binder -> binder.bind(QuerySessionSupplier.class).in(Scopes.SINGLETON);
         private Optional<Path> baseDataDir = Optional.empty();
         private Optional<SpanProcessor> spanProcessor = Optional.empty();
         private Optional<FactoryConfiguration> systemAccessControlConfiguration = Optional.empty();
@@ -785,6 +789,12 @@ public class TestingTrinoServer
         public Builder setAdditionalModule(Module additionalModule)
         {
             this.additionalModule = requireNonNull(additionalModule, "additionalModule is null");
+            return this;
+        }
+
+        public Builder setSessionSupplierModule(Module sessionSupplierModule)
+        {
+            this.sessionSupplierModule = requireNonNull(sessionSupplierModule, "sessionSupplierModule is null");
             return this;
         }
 
@@ -842,6 +852,7 @@ public class TestingTrinoServer
                     properties,
                     environment,
                     additionalModule,
+                    sessionSupplierModule,
                     baseDataDir,
                     spanProcessor,
                     systemAccessControlConfiguration,

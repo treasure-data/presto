@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 2.1
 aliases:
   - &install_jdk
     name: Install JDK
